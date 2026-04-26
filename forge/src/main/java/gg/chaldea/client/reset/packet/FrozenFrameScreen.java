@@ -1,0 +1,111 @@
+package gg.chaldea.client.reset.packet;
+
+import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.*;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.api.distmarker.OnlyIn;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+@OnlyIn(Dist.CLIENT)
+public class FrozenFrameScreen extends Screen {
+
+    private static final Logger logger = LogManager.getLogger();
+    private static final ResourceLocation TEXTURE_LOC = new ResourceLocation("clientresetpacket", "frozen_frame");
+
+    private DynamicTexture texture;
+    private boolean hasTexture = false;
+
+    private FrozenFrameScreen() {
+        super(Component.empty());
+    }
+
+    /**
+     * Captures the current framebuffer content and returns a screen that renders it.
+     * Must be called on the render thread before clearLevel().
+     */
+    public static FrozenFrameScreen capture(Minecraft mc) {
+        FrozenFrameScreen screen = new FrozenFrameScreen();
+        try {
+            RenderSystem.assertOnRenderThreadOrInit();
+            var rt = mc.getMainRenderTarget();
+            RenderSystem.bindTexture(rt.getColorTextureId());
+            NativeImage image = new NativeImage(NativeImage.Format.RGBA, rt.width, rt.height, false);
+            image.downloadTexture(0, false);
+            image.flipY();
+            screen.texture = new DynamicTexture(image);
+            mc.getTextureManager().register(TEXTURE_LOC, screen.texture);
+            screen.hasTexture = true;
+        } catch (Exception e) {
+            logger.warn("[SeamlessTransition] Failed to capture frozen frame, will use black screen: {}", e.getMessage());
+        }
+        return screen;
+    }
+
+    @Override
+    public void render(PoseStack poseStack, int mouseX, int mouseY, float partialTick) {
+        if (!hasTexture) {
+            // Fallback: solid black screen
+            fill(poseStack, 0, 0, width, height, 0xFF000000);
+            return;
+        }
+
+        RenderSystem.setShader(GameRenderer::getPositionTexShader);
+        RenderSystem.setShaderTexture(0, TEXTURE_LOC);
+        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+        RenderSystem.disableBlend();
+
+        Tesselator tess = Tesselator.getInstance();
+        BufferBuilder buf = tess.getBuilder();
+        buf.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+        // UV Y is not flipped because we already called image.flipY() during capture
+        buf.vertex(0,     height, 0).uv(0, 1).endVertex();
+        buf.vertex(width, height, 0).uv(1, 1).endVertex();
+        buf.vertex(width, 0,      0).uv(1, 0).endVertex();
+        buf.vertex(0,     0,      0).uv(0, 0).endVertex();
+        tess.end();
+    }
+
+    @Override
+    public void tick() {
+        Minecraft mc = Minecraft.getInstance();
+        // End transition once the new world and local player are both present
+        if (mc.level != null && mc.player != null) {
+            SeamlessTransition.end();
+            mc.setScreen(null);
+        }
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
+    @Override
+    public void onClose() {
+        SeamlessTransition.end();
+        cleanup();
+        super.onClose();
+    }
+
+    @Override
+    public void removed() {
+        cleanup();
+        super.removed();
+    }
+
+    private void cleanup() {
+        if (hasTexture) {
+            hasTexture = false;
+            Minecraft.getInstance().getTextureManager().release(TEXTURE_LOC);
+            // DynamicTexture.close() is handled by TextureManager after release
+        }
+    }
+}

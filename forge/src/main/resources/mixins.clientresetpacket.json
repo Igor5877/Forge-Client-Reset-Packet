@@ -10,5 +10,7 @@
     "MixinNetworkManager",
     "VanillaPacketFilterAccessor"
   ],
-  "client": []
+  "client": [
+    "MixinMinecraft"
+  ]
 }

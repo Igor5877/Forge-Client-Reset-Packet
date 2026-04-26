@@ -16,7 +16,6 @@ import org.apache.logging.log4j.Marker;
 import org.apache.logging.log4j.MarkerManager;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.GenericDirtMessageScreen;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.network.Connection;
@@ -128,19 +127,26 @@ public class ClientReset {
 		CompletableFuture<Void> future = context.enqueueWork(() -> {
 			logger.debug(RESETMARKER, "Clearing");
 
+			Minecraft mc = Minecraft.getInstance();
+
 			// Preserve
-			ServerData serverData = Minecraft.getInstance().getCurrentServer();
-			Pack serverPack = Minecraft.getInstance().getClientPackSource().serverPack;
+			ServerData serverData = mc.getCurrentServer();
+			Pack serverPack = mc.getClientPackSource().serverPack;
 
 			// Clear
-			if (Minecraft.getInstance().level == null) {
+			if (mc.level == null) {
 				// Ensure the GameData is reverted in case the client is reset during the handshake.
 				GameData.revertToFrozen();
 			}
-			Minecraft.getInstance().getClientPackSource().serverPack = null;
+			mc.getClientPackSource().serverPack = null;
 
-			// Clear
-			Minecraft.getInstance().clearLevel(new GenericDirtMessageScreen(Component.literal("Negotiating..."/*"connect.negotiating"*/)));
+			// Capture the current frame before clearing so we can show it during transition
+			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
+			SeamlessTransition.begin();
+
+			// Use our frozen frame screen instead of the dirt "Negotiating..." screen
+			mc.clearLevel(transitionScreen);
+
 			try {
 				context.getNetworkManager().channel().pipeline().remove("forge:forge_fixes");
 			} catch (NoSuchElementException ignored) {
@@ -150,8 +156,8 @@ public class ClientReset {
 			} catch (NoSuchElementException ignored) {
 			}
 			// Restore
-			Minecraft.getInstance().getClientPackSource().serverPack = serverPack;
-			Minecraft.getInstance().setCurrentServer(serverData);
+			mc.getClientPackSource().serverPack = serverPack;
+			mc.setCurrentServer(serverData);
 		});
 
 		logger.debug(RESETMARKER, "Waiting for clear to complete");
