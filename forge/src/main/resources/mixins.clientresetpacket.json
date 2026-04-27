@@ -11,6 +11,7 @@
     "VanillaPacketFilterAccessor"
   ],
   "client": [
-    "MixinMinecraft"
+    "MixinMinecraft",
+    "MixinClientLoginPacketListener"
   ]
 }

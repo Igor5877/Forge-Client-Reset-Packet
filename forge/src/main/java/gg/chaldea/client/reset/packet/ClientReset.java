@@ -7,6 +7,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import com.ibm.icu.impl.Pair;
+import gg.chaldea.client.reset.packet.network.C2SHashResponse;
+import gg.chaldea.client.reset.packet.network.S2CHashChallenge;
 import gg.chaldea.client.reset.packet.network.S2CReset;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.repository.Pack;
@@ -49,6 +51,12 @@ public class ClientReset {
 
 	public static SimpleChannel handshakeChannel;
 
+	/**
+	 * The last registry hash received from the server via S2CHashChallenge.
+	 * MixinClientLoginPacketListener reads this after LoginSuccess to name the cache file.
+	 */
+	public static volatile String lastReceivedServerHash = null;
+
 	public ClientReset() {
 		IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();
 		bus.addListener(ClientReset::init);
@@ -79,10 +87,74 @@ public class ClientReset {
 						.consumerNetworkThread(HandshakeHandler.biConsumerFor(ClientReset::handleReset))
 						.add();
 				logger.info(RESETMARKER, "Registered forge reset packet successfully.");
+
+				// Hash-challenge protocol (IDs 96/97) – paired with the fastlogin server mod
+				handshakeChannel.messageBuilder(S2CHashChallenge.class, 96)
+						.loginIndex(S2CHashChallenge::getLoginIndex, S2CHashChallenge::setLoginIndex)
+						.decoder(S2CHashChallenge::decode)
+						.encoder(S2CHashChallenge::encode)
+						.consumerNetworkThread(HandshakeHandler.biConsumerFor(ClientReset::handleHashChallenge))
+						.add();
+				// C2SHashResponse only needs an encoder on the client side (server decodes it)
+				handshakeChannel.messageBuilder(C2SHashResponse.class, 97)
+						.loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
+						.decoder(C2SHashResponse::decode)
+						.encoder(C2SHashResponse::encode)
+						.consumerNetworkThread((msg, ctx) -> ctx.get().setPacketHandled(true))
+						.add();
+				logger.info(RESETMARKER, "Registered hash-challenge packets (IDs 96/97).");
 			}
 		}
 		catch (Exception e) {
 			logger.error(RESETMARKER, "Caught exception when attempting to utilize FML's handshake. Disabling mod. Exception: " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Handles S2CHashChallenge from the fastlogin server mod.
+	 *
+	 * Checks whether the local cache contains registry data for the given hash:
+	 *   - Cache hit  → restore registry from disk, reply hasCache=true (server skips S2CRegistry)
+	 *   - Cache miss → reply hasCache=false (server does full sync, we save after LoginSuccess)
+	 */
+	@OnlyIn(Dist.CLIENT)
+	public static void handleHashChallenge(HandshakeHandler handler, S2CHashChallenge msg,
+			Supplier<NetworkEvent.Context> ctxSupplier) {
+		NetworkEvent.Context ctx = ctxSupplier.get();
+		Connection connection    = ctx.getNetworkManager();
+		String hash              = msg.getRegistryHash();
+
+		logger.info(RESETMARKER, "Received hash challenge from server: {}", hash);
+		lastReceivedServerHash = hash;
+
+		boolean hasCache = RegistryCache.hasCachedRegistry(hash);
+
+		if (hasCache) {
+			logger.info(RESETMARKER, "Registry cache HIT for hash {} – scheduling restore", hash);
+			// Restore on the main thread so GameData is in the right state before handshake continues
+			ctx.enqueueWork(() -> {
+				boolean ok = RegistryCache.restoreFromCache(hash);
+				if (!ok) {
+					logger.warn(RESETMARKER, "Cache restore failed – server will do full sync on next connection");
+					RegistryCache.clearAll();
+					lastReceivedServerHash = null;
+				}
+			});
+		} else {
+			logger.info(RESETMARKER, "Registry cache MISS for hash {} – full sync will proceed", hash);
+		}
+
+		ctx.setPacketHandled(true);
+
+		try {
+			C2SHashResponse response = new C2SHashResponse(hasCache);
+			handshakeChannel.reply(
+				response,
+				(NetworkEvent.Context) contextConstructor.newInstance(
+					connection, NetworkDirection.LOGIN_TO_SERVER, 97)
+			);
+		} catch (Exception e) {
+			logger.error(RESETMARKER, "Failed to send C2SHashResponse: {}", e.getMessage());
 		}
 	}
 
