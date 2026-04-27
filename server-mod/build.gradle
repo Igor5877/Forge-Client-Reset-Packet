@@ -1,0 +1,59 @@
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        mavenCentral()
+        maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+    }
+    dependencies {
+        classpath 'net.minecraftforge.gradle:ForgeGradle:6.0.+'
+        classpath 'org.spongepowered:mixingradle:0.7-SNAPSHOT'
+    }
+}
+
+apply plugin: 'net.minecraftforge.gradle'
+apply plugin: 'org.spongepowered.mixin'
+apply plugin: 'java'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+version = mod_version
+group   = mod_group
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+
+    runs {
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'mixin.env.remapRefMap', 'true'
+            property 'mixin.env.refMapRemappingFile', "${projectDir}/build/createSrgToMcp/output.srg"
+            mods {
+                fastlogin { source sourceSets.main }
+            }
+        }
+    }
+}
+
+mixin {
+    add sourceSets.main, "mixins.fastlogin.refmap.json"
+    config "mixins.fastlogin.json"
+}
+
+repositories {
+    maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+}
+
+jar {
+    manifest.attributes(
+        'TweakClass'  : 'org.spongepowered.asm.launch.MixinTweaker',
+        'TweakOrder'  : 0,
+        'MixinConfigs': 'mixins.fastlogin.json'
+    )
+}

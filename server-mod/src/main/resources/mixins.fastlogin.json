@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "gg.chaldea.server.fastlogin.mixin",
+  "refmap": "mixins.fastlogin.refmap.json",
+  "target": "@env(DEFAULT)",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "MixinHandshakeHandler",
+    "MixinGameData"
+  ],
+  "client": []
+}

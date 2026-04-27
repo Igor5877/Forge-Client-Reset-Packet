@@ -1,0 +1,30 @@
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "MIT"
+
+[[dependencies.fastlogin]]
+    modId        = "forge"
+    mandatory    = true
+    versionRange = "[47.2,)"
+    ordering     = "NONE"
+    side         = "SERVER"
+
+[[dependencies.fastlogin]]
+    modId        = "minecraft"
+    mandatory    = true
+    versionRange = "[1.20.1,1.21)"
+    ordering     = "NONE"
+    side         = "SERVER"
+
+[[mods]]
+    modId       = "fastlogin"
+    version     = "${file.jarVersion}"
+    displayName = "Forge Fast Login"
+    description = '''
+        Server-side mod that skips FML registry sync for clients that already
+        have a cached registry matching the current server state.
+        Reduces repeated login time from ~1 minute to ~5 seconds.
+    '''
+
+[[mixins]]
+    config = "mixins.fastlogin.json"
