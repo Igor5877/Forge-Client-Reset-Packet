@@ -1,6 +1,5 @@
 package gg.chaldea.server.fastlogin;
 
-import gg.chaldea.server.fastlogin.mixin.MixinHandshakeHandler;
 import gg.chaldea.server.fastlogin.network.C2SHashResponse;
 import gg.chaldea.server.fastlogin.network.S2CHashChallenge;
 import net.minecraft.network.Connection;
@@ -12,7 +11,6 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.util.ObfuscationReflectionHelper;
-import net.minecraftforge.network.HandshakeHandler;
 import net.minecraftforge.network.NetworkConstants;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkEvent;
@@ -59,12 +57,32 @@ public class FastLoginMod {
                 .consumerNetworkThread((msg, ctx) -> ctx.get().setPacketHandled(true))
                 .add();
 
-            // C2S: client responds with whether it has a matching cache
+            // C2S: client responds with whether it has a matching cache.
+            //
+            // IMPORTANT: use a direct network-thread lambda, NOT HandshakeHandler.biConsumerFor().
+            // biConsumerFor() routes through ctx.enqueueWork(), which schedules onto the server
+            // main thread.  But the main thread may be blocking in MixinGameData.fl$maybeSkipSnapshot
+            // waiting for this very response – using enqueueWork would deadlock.
+            // Running directly on the Netty IO thread avoids the deadlock: ConnectionSkipTracker
+            // uses ConcurrentHashSet and is safe to write from any thread.
             handshakeChannel.messageBuilder(C2SHashResponse.class, ID_C2S_RESPONSE)
                 .loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
                 .decoder(C2SHashResponse::decode)
                 .encoder(C2SHashResponse::encode)
-                .consumerNetworkThread(HandshakeHandler.biConsumerFor(MixinHandshakeHandler::handleHashResponse))
+                .consumerNetworkThread((msg, ctxSupplier) -> {
+                    NetworkEvent.Context ctx = ctxSupplier.get();
+                    Connection conn = ctx.getNetworkManager();
+                    if (msg.hasCache()) {
+                        LOGGER.info("[FastLogin] Client has cached registry – skipping S2CRegistry for {}",
+                            conn.getRemoteAddress());
+                        ConnectionSkipTracker.markSkip(conn.channel());
+                    } else {
+                        LOGGER.debug("[FastLogin] Client needs full registry sync for {}",
+                            conn.getRemoteAddress());
+                        ConnectionSkipTracker.markNoSkip(conn.channel());
+                    }
+                    ctx.setPacketHandled(true);
+                })
                 .add();
 
             LOGGER.info("[FastLogin] Registered hash-challenge handshake packets.");

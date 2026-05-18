@@ -65,9 +65,14 @@ public class MixinHandshakeHandler {
 
         NetworkEvent.Context ctx = ctxSupplier.get();
         Connection connection    = ctx.getNetworkManager();
+        io.netty.channel.Channel ch = connection.channel();
 
-        // Mark this connection as waiting so MixinGameData can gate the registry send
-        ConnectionSkipTracker.markPending(connection.channel());
+        // Set CURRENT_CHANNEL first so MixinGameData can identify this connection
+        // in buildSnapshotList() which runs later on the same server-main thread.
+        MixinGameData.CURRENT_CHANNEL.set(ch);
+
+        // Mark this connection as waiting so MixinGameData spin-waits for our response
+        ConnectionSkipTracker.markPending(ch);
 
         // Send hash challenge to client
         S2CHashChallenge challenge = new S2CHashChallenge(RegistryHashUtil.getHash());
@@ -76,7 +81,8 @@ public class MixinHandshakeHandler {
             LOGGER.debug("[FastLogin] Sent hash challenge to {}", connection.getRemoteAddress());
         } catch (Exception e) {
             LOGGER.warn("[FastLogin] Failed to send hash challenge, will do full sync: {}", e.getMessage());
-            ConnectionSkipTracker.markNoSkip(connection.channel());
+            ConnectionSkipTracker.markNoSkip(ch);
+            MixinGameData.CURRENT_CHANNEL.remove();
         }
     }
 

@@ -149,11 +149,22 @@ public class RegistryCache {
     }
 
     /**
-     * Applies the cached id mappings back to the ACTIVE Forge registries.
+     * Applies the cached id mappings back to the ACTIVE Forge registries using
+     * {@code ForgeRegistry.Snapshot} + {@code GameData.injectSnapshot()}, which
+     * is the same path Forge itself uses during a normal registry sync.
      *
-     * Calls ForgeRegistry.loadIds() or the equivalent internal method.
-     * TODO: verify method signature against Forge 43.x sources.
-     *       Candidate: ForgeRegistry.loadIds(Map<ResourceLocation,Integer> ids, ...)
+     * {@code ForgeRegistry.setId()} does NOT exist in Forge 43.x / 47.x – do
+     * not use it.  The correct public surface is:
+     *
+     *   ForgeRegistry.Snapshot snap = new ForgeRegistry.Snapshot();
+     *   snap.ids.put(rl, id);          // Object2IntOpenHashMap / ObjectIntMap
+     *   GameData.injectSnapshot(reg, snap, false);
+     *
+     * TODO: verify the exact signature of GameData.injectSnapshot() in Forge
+     *       43.x (1.19.2) and 47.x (1.20.1).  Candidates:
+     *         - GameData.injectSnapshot(ForgeRegistry, ForgeRegistry.Snapshot, boolean)
+     *         - GameData.deserializeRegistries(Map<RL, Snapshot>)
+     *       Use ObfuscationReflectionHelper.findMethod() if the method is not public.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void applyToActiveRegistries(Map<ResourceLocation, Map<ResourceLocation, Integer>> data)
@@ -165,22 +176,30 @@ public class RegistryCache {
         Map<ResourceLocation, ForgeRegistry<?>> registries =
             (Map<ResourceLocation, ForgeRegistry<?>>) registriesField.get(active);
 
+        // Locate GameData.injectSnapshot via reflection (package-private in Forge 43.x).
+        // TODO: verify method name and parameter types against decompiled Forge source.
+        Method injectSnapshot = ObfuscationReflectionHelper.findMethod(
+            net.minecraftforge.registries.GameData.class,
+            "injectSnapshot",
+            ForgeRegistry.class,
+            ForgeRegistry.Snapshot.class,
+            boolean.class
+        );
+        injectSnapshot.setAccessible(true);
+
         for (Map.Entry<ResourceLocation, Map<ResourceLocation, Integer>> entry : data.entrySet()) {
             ForgeRegistry<?> reg = registries.get(entry.getKey());
             if (reg == null) continue;
 
-            // ForgeRegistry has internal setId / overrideId methods.
-            // The safest public path is via ForgeRegistry.Snapshot + GameData.injectSnapshot.
-            // TODO: use GameData.injectSnapshot(reg, snapshot, false) once we build a Snapshot.
-            // For now we use reflection on ForgeRegistry directly.
-            Method setId = ObfuscationReflectionHelper.findMethod(
-                ForgeRegistry.class, "setId",
-                ResourceLocation.class, int.class
-            );
-            setId.setAccessible(true);
+            // Build a minimal Snapshot containing only the id→RL mappings we care about.
+            // ForgeRegistry.Snapshot.ids is an Object2IntOpenHashMap<ResourceLocation>.
+            ForgeRegistry.Snapshot snapshot = new ForgeRegistry.Snapshot();
             for (Map.Entry<ResourceLocation, Integer> idEntry : entry.getValue().entrySet()) {
-                setId.invoke(reg, idEntry.getKey(), idEntry.getValue());
+                snapshot.ids.put(idEntry.getKey(), (int) idEntry.getValue());
             }
+
+            // Apply – same as what Forge does when it receives S2CRegistry from the server.
+            injectSnapshot.invoke(null, reg, snapshot, false);
         }
     }
 

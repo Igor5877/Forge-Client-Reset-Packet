@@ -1,8 +1,9 @@
 package gg.chaldea.client.reset.packet.mixin;
 
+import gg.chaldea.client.reset.packet.ClientReset;
 import gg.chaldea.client.reset.packet.RegistryCache;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
-import net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket;
+import net.minecraft.network.protocol.login.ClientboundLoginSuccessPacket;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import org.apache.logging.log4j.LogManager;
@@ -13,22 +14,14 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Hooks into the moment the client receives LoginFinished / LoginSuccess from
- * the server.  At this point all S2CRegistry packets have already been
- * processed and GameData contains the fully applied server registry state.
+ * Hooks into LoginSuccess to save the registry cache after a full sync.
  *
- * We use this opportunity to persist the registry to the local cache so that
- * the NEXT login (or server switch) can skip the registry sync entirely when
- * the server hash matches.
+ * Packet class names differ between MC versions:
+ *   1.19.2 → ClientboundLoginSuccessPacket  / handleLoginSuccess
+ *   1.20.1 → ClientboundLoginFinishedPacket / handleLoginFinished
  *
- * The server hash is stored by {@link gg.chaldea.client.reset.packet.ClientReset}
- * when it processes the S2CHashChallenge packet and placed in
- * {@link gg.chaldea.client.reset.packet.ClientReset#lastReceivedServerHash}.
- *
- * NOTE: In Forge 43.x the finish-login packet may arrive via a different code
- * path (LoginSuccess is wrapped in a Forge handshake ack).  The method name
- * below ("handleLoginFinished") is the MojMap name for 1.19.2.
- * TODO: verify against decompiled 1.19.2 sources if the mixin fails to apply.
+ * This file targets 1.19.2.  When porting to 1.20.1 update both the import
+ * and the method descriptor below.
  */
 @Mixin(ClientHandshakePacketListenerImpl.class)
 @OnlyIn(Dist.CLIENT)
@@ -37,14 +30,15 @@ public class MixinClientLoginPacketListener {
     private static final Logger LOGGER = LogManager.getLogger();
 
     @Inject(
-        method = "handleLoginFinished(Lnet/minecraft/network/protocol/login/ClientboundLoginFinishedPacket;)V",
+        method = "handleLoginSuccess(Lnet/minecraft/network/protocol/login/ClientboundLoginSuccessPacket;)V",
         at     = @At("TAIL")
     )
-    private void crp$onLoginFinished(ClientboundLoginFinishedPacket packet, CallbackInfo ci) {
-        String hash = gg.chaldea.client.reset.packet.ClientReset.lastReceivedServerHash;
+    private void crp$onLoginSuccess(ClientboundLoginSuccessPacket packet, CallbackInfo ci) {
+        String hash = ClientReset.lastReceivedServerHash;
         if (hash == null) return;
 
-        // Save async so we don't stall the network thread
+        // Save on a background thread so we do not stall the network event loop.
+        // GameData is stable after LoginSuccess – reading registry keys is thread-safe here.
         String hashCopy = hash;
         Thread saver = new Thread(() -> RegistryCache.saveRegistry(hashCopy), "CRP-RegistryCacheSaver");
         saver.setDaemon(true);

@@ -6,7 +6,6 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
-import com.ibm.icu.impl.Pair;
 import gg.chaldea.client.reset.packet.network.C2SHashResponse;
 import gg.chaldea.client.reset.packet.network.S2CHashChallenge;
 import gg.chaldea.client.reset.packet.network.S2CReset;
@@ -148,10 +147,12 @@ public class ClientReset {
 
 		try {
 			C2SHashResponse response = new C2SHashResponse(hasCache);
+			// Direction must match the original S2C packet direction (LOGIN_TO_CLIENT),
+			// same convention as C2SAcknowledge replies in handleReset().
 			handshakeChannel.reply(
 				response,
 				(NetworkEvent.Context) contextConstructor.newInstance(
-					connection, NetworkDirection.LOGIN_TO_SERVER, 97)
+					connection, NetworkDirection.LOGIN_TO_CLIENT, 97)
 			);
 		} catch (Exception e) {
 			logger.error(RESETMARKER, "Failed to send C2SHashResponse: {}", e.getMessage());
