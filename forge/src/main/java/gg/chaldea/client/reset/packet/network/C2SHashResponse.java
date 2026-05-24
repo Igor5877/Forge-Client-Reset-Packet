@@ -7,8 +7,10 @@ import net.minecraftforge.network.HandshakeMessages;
  * Client → Server (ID 97).
  * hasCache = true  → client has a valid cached registry; server may skip S2CRegistry.
  * hasCache = false → client needs a full registry sync.
+ *
+ * Extends C2SAcknowledge (public) rather than LoginIndexedMessage (package-private).
  */
-public class C2SHashResponse extends HandshakeMessages.LoginIndexedMessage {
+public class C2SHashResponse extends HandshakeMessages.C2SAcknowledge {
 
     private final boolean hasCache;
 
