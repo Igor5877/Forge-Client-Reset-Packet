@@ -31,7 +31,8 @@ public class MixinClientLoginPacketListener {
 
     @Inject(
         method = "handleLoginSuccess(Lnet/minecraft/network/protocol/login/ClientboundLoginSuccessPacket;)V",
-        at     = @At("TAIL")
+        at     = @At("TAIL"),
+        remap  = false
     )
     private void crp$onLoginSuccess(ClientboundLoginSuccessPacket packet, CallbackInfo ci) {
         String hash = ClientReset.lastReceivedServerHash;
