@@ -1,9 +1,10 @@
 package gg.chaldea.server.fastlogin.mixin;
 
+import gg.chaldea.server.fastlogin.ChannelContext;
 import gg.chaldea.server.fastlogin.ConnectionSkipTracker;
 import io.netty.channel.Channel;
-import net.minecraftforge.registries.GameData;
-import org.apache.commons.lang3.tuple.Pair;
+import net.minecraftforge.network.NetworkDirection;
+import net.minecraftforge.network.NetworkRegistry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,52 +17,43 @@ import java.util.List;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Intercepts {@link GameData#buildSnapshotList()} which is the method Forge
- * calls server-side to produce the list of S2CRegistry packets.
+ * Intercepts {@link NetworkRegistry#gatherLoginPayloads(NetworkDirection, boolean)}
+ * which is the method Forge 47.x calls server-side to produce the list of login
+ * payload packets (including S2CRegistry packets that carry the mod registries).
  *
  * If the current network thread is processing a connection that has been
  * marked "skip" by {@link ConnectionSkipTracker}, we return an empty list so
  * that no registry packets are sent and the handshake proceeds directly to
  * LoginSuccess.
  *
+ * NOTE: The class name `MixinGameData` is historical — it now targets
+ * {@link NetworkRegistry}.  We kept the file name to avoid churn in
+ * mixins.fastlogin.json.
+ *
  * We use a ThreadLocal to identify which connection the current network-thread
- * call belongs to, set just before HandshakeHandler calls buildSnapshotList().
- *
- * NOTE: Method name may differ across Forge 47.x builds.
- *       Verify with: grep -r "buildSnapshotList\|generateRegistryPackets\|takeSnapshot"
- *                         forge-1.20.1-47.2.0-sources.jar
- *
- *       Common candidates for Forge 47.x:
- *         - buildSnapshotList()
- *         - getCustomTagDiff(...)
- *         - generateRegistryPackets(...)
+ * call belongs to, set just before HandshakeHandler calls gatherLoginPayloads().
  */
-@Mixin(value = GameData.class, remap = false)
+@Mixin(value = NetworkRegistry.class, remap = false)
 public class MixinGameData {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
-    /**
-     * Set by {@link MixinHandshakeHandler} at the HEAD of handleClientModListOnServer,
-     * before the original method body calls buildSnapshotList().  The ThreadLocal
-     * identifies which Netty channel the current server-main-thread invocation is
-     * serving so we can look up its skip state.
-     */
-    public static final ThreadLocal<Channel> CURRENT_CHANNEL = new ThreadLocal<>();
+    // CURRENT_CHANNEL lives in gg.chaldea.server.fastlogin.ChannelContext because
+    // Mixin disallows non-private static fields on mixin classes.
 
-    /**
-     * TODO: verify the exact method name/descriptor in Forge 47.2.0.
-     *       Replace "buildSnapshotList" below with the correct name if needed.
-     *       Candidates: buildSnapshotList, generateRegistryPackets, takeSnapshot
-     */
     @Inject(
-        method = "buildSnapshotList()Ljava/util/List;",
+        method = "gatherLoginPayloads(Lnet/minecraftforge/network/NetworkDirection;Z)Ljava/util/List;",
         at     = @At("HEAD"),
         remap  = false,
         cancellable = true
     )
-    private static void fl$maybeSkipSnapshot(CallbackInfoReturnable<List<Pair<String, ?>>> cir) {
-        Channel ch = CURRENT_CHANNEL.get();
+    private static void fl$maybeSkipSnapshot(NetworkDirection direction, boolean isLocal,
+                                              CallbackInfoReturnable<List<?>> cir) {
+        // Only intercept server→client login payloads; the C2S direction is not
+        // generating registry sync packets.
+        if (direction != NetworkDirection.LOGIN_TO_CLIENT) return;
+
+        Channel ch = ChannelContext.CURRENT_CHANNEL.get();
         if (ch == null) return; // Not a connection we instrumented
 
         // Spin-wait for the client's C2SHashResponse, which arrives on the Netty IO
@@ -82,7 +74,7 @@ public class MixinGameData {
             LockSupport.parkNanos(500_000L); // 0.5 ms
         }
 
-        CURRENT_CHANNEL.remove(); // Always clean up ThreadLocal
+        ChannelContext.CURRENT_CHANNEL.remove(); // Always clean up ThreadLocal
 
         if (ConnectionSkipTracker.shouldSkip(ch)) {
             LOGGER.info("[FastLogin] Skipping registry sync for channel {}", ch);

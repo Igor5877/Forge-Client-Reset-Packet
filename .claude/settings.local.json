@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -p /home/igor/.gradle/caches/forge_gradle/mcp_repo/net/minecraft/joined/1.20.1-20230612.114412/joined-1.20.1-20230612.114412-srg.jar net/minecraft/client/gui/screens/Screen.class)",
+      "Bash(javap -p)"
+    ]
+  }
+}

@@ -1,15 +1,33 @@
 modLoader="javafml"
-loaderVersion="[36,)"
+loaderVersion="[47,)"
 license="https://github.com/Just-Chaldea/Forge-Client-Reset-Packet/blob/main/LICENSE"
 issueTrackerURL="https://github.com/Just-Chaldea/Forge-Client-Reset-Packet/issues"
 
 [[mods]]
 modId="clientresetpacket"
-version="0.0.6"
+version="0.2.1"
 displayName="Client Reset Packet"
 displayURL="https://github.com/Just-Chaldea/Forge-Client-Reset-Packet"
 credits="https://github.com/Just-Chaldea/Forge-Client-Reset-Packet"
 authors="https://github.com/Just-Chaldea/Forge-Client-Reset-Packet"
 description='''
 Adds a reset packet to Minecraft Forge to allow Modern Forge (1.13+) support on proxies.
+Includes registry cache for fast login and seamless server transitions.
 '''
+
+[[dependencies.clientresetpacket]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.clientresetpacket]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+    ordering="NONE"
+    side="BOTH"
+
+[[mixins]]
+    config="mixins.clientresetpacket.json"

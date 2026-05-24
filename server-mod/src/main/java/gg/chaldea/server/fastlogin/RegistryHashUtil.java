@@ -38,9 +38,10 @@ public class RegistryHashUtil {
         ForgeRegistries.RECIPE_TYPES,
         ForgeRegistries.RECIPE_SERIALIZERS,
         ForgeRegistries.ATTRIBUTES,
-        ForgeRegistries.PAINTING_VARIANTS,
-        ForgeRegistries.CAT_VARIANTS,
-        ForgeRegistries.FROG_VARIANTS
+        ForgeRegistries.PAINTING_VARIANTS
+        // CAT_VARIANTS and FROG_VARIANTS moved to vanilla BuiltInRegistries in 1.20.1
+        // and are no longer exposed through ForgeRegistries; they are also not
+        // synced via the FML registry sync, so excluding them is correct.
     );
 
     private static volatile String cachedHash = null;

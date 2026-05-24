@@ -2,15 +2,16 @@ package gg.chaldea.client.reset.packet;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import gg.chaldea.client.reset.packet.network.C2SHashResponse;
 import gg.chaldea.client.reset.packet.network.S2CHashChallenge;
 import gg.chaldea.client.reset.packet.network.S2CReset;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.packs.repository.Pack;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.Marker;
@@ -18,7 +19,6 @@ import org.apache.logging.log4j.MarkerManager;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
-import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.network.Connection;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraftforge.api.distmarker.Dist;
@@ -94,12 +94,16 @@ public class ClientReset {
 						.encoder(S2CHashChallenge::encode)
 						.consumerNetworkThread(HandshakeHandler.biConsumerFor(ClientReset::handleHashChallenge))
 						.add();
-				// C2SHashResponse only needs an encoder on the client side (server decodes it)
+				// C2SHashResponse only needs an encoder on the client side (server decodes it).
+				// Cast disambiguates between the BiConsumer and ToBooleanBiFunction overloads
+				// of consumerNetworkThread in Forge 47.x's SimpleChannel.MessageBuilder.
+				BiConsumer<C2SHashResponse, Supplier<NetworkEvent.Context>> hashResponseStub =
+						(msg, ctx) -> ctx.get().setPacketHandled(true);
 				handshakeChannel.messageBuilder(C2SHashResponse.class, 97)
 						.loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
 						.decoder(C2SHashResponse::decode)
 						.encoder(C2SHashResponse::encode)
-						.consumerNetworkThread((msg, ctx) -> ctx.get().setPacketHandled(true))
+						.consumerNetworkThread(hashResponseStub)
 						.add();
 				logger.info(RESETMARKER, "Registered hash-challenge packets (IDs 96/97).");
 			}
@@ -176,8 +180,9 @@ public class ClientReset {
 
 		NetworkHooks.registerClientLoginChannel(connection);
 		connection.setProtocol(ConnectionProtocol.LOGIN);
+		// 1.20.1 constructor: (Connection, Minecraft, ServerData, Screen, boolean quickPlay, Duration, Consumer<Component>)
 		connection.setListener(new ClientHandshakePacketListenerImpl(
-				connection, Minecraft.getInstance(), null, statusMessage -> {}
+				connection, Minecraft.getInstance(), null, null, false, Duration.ZERO, statusMessage -> {}
 		));
 		Minecraft.getInstance().pendingConnection = connection;
 		context.setPacketHandled(true);
@@ -202,16 +207,18 @@ public class ClientReset {
 
 			Minecraft mc = Minecraft.getInstance();
 
-			// Preserve
-			ServerData serverData = mc.getCurrentServer();
-			Pack serverPack = mc.getClientPackSource().serverPack;
+			// In 1.20.1 the current server data is derived from the active
+			// ClientPacketListener (Minecraft.getCurrentServer() reads it from
+			// the listener), so there's no Minecraft#setCurrentServer to call.
+			// The new connection we set up below installs its own listener,
+			// so the server context is preserved naturally.  Similarly, the
+			// server-supplied resource pack is owned by DownloadedPackSource
+			// and survives clearLevel() — no manual preserve/restore needed.
 
-			// Clear
 			if (mc.level == null) {
 				// Ensure the GameData is reverted in case the client is reset during the handshake.
 				GameData.revertToFrozen();
 			}
-			mc.getClientPackSource().serverPack = null;
 
 			// Capture the current frame before clearing so we can show it during transition
 			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
@@ -228,9 +235,6 @@ public class ClientReset {
 				context.getNetworkManager().channel().pipeline().remove("forge:vanilla_filter");
 			} catch (NoSuchElementException ignored) {
 			}
-			// Restore
-			mc.getClientPackSource().serverPack = serverPack;
-			mc.setCurrentServer(serverData);
 		});
 
 		logger.debug(RESETMARKER, "Waiting for clear to complete");

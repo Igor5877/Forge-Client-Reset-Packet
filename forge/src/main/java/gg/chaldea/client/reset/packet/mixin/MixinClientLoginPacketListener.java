@@ -3,7 +3,7 @@ package gg.chaldea.client.reset.packet.mixin;
 import gg.chaldea.client.reset.packet.ClientReset;
 import gg.chaldea.client.reset.packet.RegistryCache;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
-import net.minecraft.network.protocol.login.ClientboundLoginSuccessPacket;
+import net.minecraft.network.protocol.login.ClientboundGameProfilePacket;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import org.apache.logging.log4j.LogManager;
@@ -14,14 +14,11 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Hooks into LoginSuccess to save the registry cache after a full sync.
+ * Hooks into the login-success path to save the registry cache after a full sync.
  *
- * Packet class names differ between MC versions:
- *   1.19.2 → ClientboundLoginSuccessPacket  / handleLoginSuccess
- *   1.20.1 → ClientboundLoginFinishedPacket / handleLoginFinished
- *
- * This file targets 1.19.2.  When porting to 1.20.1 update both the import
- * and the method descriptor below.
+ * In MC 1.20.1 the packet is `ClientboundGameProfilePacket` and the handler
+ * method on `ClientHandshakePacketListenerImpl` is `handleGameProfile`.
+ * (Earlier versions used `ClientboundLoginSuccessPacket` / `handleLoginSuccess`.)
  */
 @Mixin(ClientHandshakePacketListenerImpl.class)
 @OnlyIn(Dist.CLIENT)
@@ -30,10 +27,10 @@ public class MixinClientLoginPacketListener {
     private static final Logger LOGGER = LogManager.getLogger();
 
     @Inject(
-        method = "handleLoginSuccess(Lnet/minecraft/network/protocol/login/ClientboundLoginSuccessPacket;)V",
+        method = "handleGameProfile(Lnet/minecraft/network/protocol/login/ClientboundGameProfilePacket;)V",
         at     = @At("TAIL")
     )
-    private void crp$onLoginSuccess(ClientboundLoginSuccessPacket packet, CallbackInfo ci) {
+    private void crp$onLoginSuccess(ClientboundGameProfilePacket packet, CallbackInfo ci) {
         String hash = ClientReset.lastReceivedServerHash;
         if (hash == null) return;
 

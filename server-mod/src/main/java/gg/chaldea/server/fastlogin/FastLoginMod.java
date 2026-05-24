@@ -6,7 +6,6 @@ import net.minecraft.network.Connection;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
@@ -39,7 +38,6 @@ public class FastLoginMod {
         MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onServerStarted);
     }
 
-    @SubscribeEvent
     private static void onCommonSetup(FMLCommonSetupEvent event) {
         try {
             Field f = ObfuscationReflectionHelper.findField(NetworkConstants.class, "handshakeChannel");
@@ -48,13 +46,17 @@ public class FastLoginMod {
             contextConstructor = ObfuscationReflectionHelper.findConstructor(
                 NetworkEvent.Context.class, Connection.class, NetworkDirection.class, int.class);
 
-            // S2C: server sends hash challenge
+            // S2C: server sends hash challenge.
+            // The cast disambiguates between BiConsumer and ToBooleanBiFunction
+            // overloads of consumerNetworkThread on Forge 47.x.
+            java.util.function.BiConsumer<S2CHashChallenge, java.util.function.Supplier<NetworkEvent.Context>> challengeStub =
+                (msg, ctx) -> ctx.get().setPacketHandled(true);
             handshakeChannel.messageBuilder(S2CHashChallenge.class, ID_S2C_CHALLENGE)
                 .loginIndex(S2CHashChallenge::getLoginIndex, S2CHashChallenge::setLoginIndex)
                 .decoder(S2CHashChallenge::decode)
                 .encoder(S2CHashChallenge::encode)
                 // Client-side handler is registered in the client CRP mod
-                .consumerNetworkThread((msg, ctx) -> ctx.get().setPacketHandled(true))
+                .consumerNetworkThread(challengeStub)
                 .add();
 
             // C2S: client responds with whether it has a matching cache.
@@ -65,11 +67,8 @@ public class FastLoginMod {
             // waiting for this very response – using enqueueWork would deadlock.
             // Running directly on the Netty IO thread avoids the deadlock: ConnectionSkipTracker
             // uses ConcurrentHashSet and is safe to write from any thread.
-            handshakeChannel.messageBuilder(C2SHashResponse.class, ID_C2S_RESPONSE)
-                .loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
-                .decoder(C2SHashResponse::decode)
-                .encoder(C2SHashResponse::encode)
-                .consumerNetworkThread((msg, ctxSupplier) -> {
+            java.util.function.BiConsumer<C2SHashResponse, java.util.function.Supplier<NetworkEvent.Context>> responseHandler =
+                (msg, ctxSupplier) -> {
                     NetworkEvent.Context ctx = ctxSupplier.get();
                     Connection conn = ctx.getNetworkManager();
                     if (msg.hasCache()) {
@@ -82,7 +81,12 @@ public class FastLoginMod {
                         ConnectionSkipTracker.markNoSkip(conn.channel());
                     }
                     ctx.setPacketHandled(true);
-                })
+                };
+            handshakeChannel.messageBuilder(C2SHashResponse.class, ID_C2S_RESPONSE)
+                .loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
+                .decoder(C2SHashResponse::decode)
+                .encoder(C2SHashResponse::encode)
+                .consumerNetworkThread(responseHandler)
                 .add();
 
             LOGGER.info("[FastLogin] Registered hash-challenge handshake packets.");
@@ -92,17 +96,20 @@ public class FastLoginMod {
         }
     }
 
-    @SubscribeEvent
     private static void onServerStarted(ServerStartedEvent event) {
         // Compute registry hash after all mods have registered everything
         RegistryHashUtil.computeAndCache();
     }
 
-    /** Sends S2CHashChallenge on the FML handshake channel. */
+    /**
+     * Sends S2CHashChallenge from server to client on the FML handshake channel.
+     *
+     * We call sendTo() directly (not reply()) because reply() flips the context's
+     * direction: passing LOGIN_TO_CLIENT to reply() actually sends LOGIN_TO_SERVER,
+     * which the server cannot serialize (it's a client→server direction).
+     */
     public static void sendHashChallenge(S2CHashChallenge challenge, Connection connection) throws Exception {
-        if (handshakeChannel == null || contextConstructor == null) return;
-        NetworkEvent.Context ctx = (NetworkEvent.Context) contextConstructor.newInstance(
-            connection, NetworkDirection.LOGIN_TO_CLIENT, ID_S2C_CHALLENGE);
-        handshakeChannel.reply(challenge, ctx);
+        if (handshakeChannel == null) return;
+        handshakeChannel.sendTo(challenge, connection, NetworkDirection.LOGIN_TO_CLIENT);
     }
 }
