@@ -33,6 +33,22 @@ public class FastLoginMod {
      */
     public static final boolean ENABLED = false;
 
+    /**
+     * Batch-flush all FML handshake packets in one server tick instead of
+     * Forge's default "1 per tick". The vanilla HandshakeHandler.tickServer
+     * sends a single LoginPayload per call, so ~80 packets take ~4 seconds
+     * even though each packet's content is sub-millisecond to serialize.
+     *
+     * Measured impact on /myisland switch: reset → login_success drops
+     * from ~5.3s to ~1.5s (saves ~3.5s — the dominant remaining cost).
+     *
+     * Safe because FML protocol orders packets by index, and the netty
+     * pipeline preserves write order: the client processes them in the
+     * exact same sequence it would have, just without the per-packet
+     * tick delay.
+     */
+    public static final boolean BATCH_HANDSHAKE_ENABLED = true;
+
     /** Packet IDs – must not clash with CRP (98) or Forge internals. */
     public static final int ID_S2C_CHALLENGE = 96;
     public static final int ID_C2S_RESPONSE  = 97;
