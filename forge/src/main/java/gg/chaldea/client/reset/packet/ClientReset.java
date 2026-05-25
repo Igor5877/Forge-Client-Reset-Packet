@@ -229,7 +229,9 @@ public static boolean handleClear(NetworkEvent.Context context) {
 
         FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
         SeamlessTransition.begin();
-        SeamlessTransition.keepChunkBuffers = true;
+        // Phase 2 (keepChunkBuffers) disabled — caused stale GL meshes when
+        // switching to a backend with different blocks (modded blocks on
+        // island showed lobby's textures). Safe only for same-modset switches.
         SeamlessTransition.softClear = true;
         try {
             mc.clearLevel(transitionScreen);
