@@ -1,0 +1,55 @@
+package gg.chaldea.client.reset.packet.mixin;
+
+import gg.chaldea.client.reset.packet.ClientReset;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.network.Connection;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
+import net.minecraft.resources.ResourceLocation;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+/**
+ * Catches PLAY-phase S2CReset from Ambassador 1.5.x.
+ *
+ * Ambassador 1.4.x sent reset via LoginPluginMessagePacket(98, "fml:loginwrapper", ...)
+ * during LOGIN phase — handled by the standard SimpleChannel handler in ClientReset.
+ *
+ * Ambassador 1.5.x sends reset via PluginMessagePacket("fml:handshake", payload={varint 98})
+ * during PLAY phase. Forge's IndexedMessageCodec may not dispatch this to our
+ * SimpleChannel handler (different phase / different message type), so we
+ * intercept at ClientPacketListener.handleCustomPayload directly.
+ */
+@Mixin(ClientPacketListener.class)
+public class MixinClientPacketListenerReset {
+
+    @Shadow @Final private Connection connection;
+
+    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
+    private void crp$interceptPlayPhaseReset(ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
+        ResourceLocation id = packet.getIdentifier();
+        if (id == null || !"fml".equals(id.getNamespace()) || !"handshake".equals(id.getPath())) {
+            return;
+        }
+        FriendlyByteBuf data = packet.getData();
+        if (data == null || !data.isReadable()) {
+            return;
+        }
+        int readerStart = data.readerIndex();
+        try {
+            int packetId = data.readVarInt();
+            if (packetId == 98) {
+                ClientReset.handlePlayPhaseReset(connection);
+                ci.cancel();
+                return;
+            }
+        } catch (Exception ignored) {
+            // Not a parseable handshake packet — let Forge handle it.
+        }
+        data.readerIndex(readerStart);
+    }
+}

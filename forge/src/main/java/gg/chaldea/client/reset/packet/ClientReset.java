@@ -178,6 +178,59 @@ public class ClientReset {
     	logger.info(RESETMARKER, text);
 	}
 
+	/**
+	 * PLAY-phase reset entry point — invoked from MixinClientPacketListenerReset
+	 * when Ambassador 1.5.x sends PluginMessage("fml:handshake", {varint 98})
+	 * while the client is already in PLAY state. Performs the same clearLevel +
+	 * state transition + ACK as handleReset() but with no NetworkEvent.Context.
+	 */
+	@OnlyIn(Dist.CLIENT)
+	public static void handlePlayPhaseReset(Connection connection) {
+		logger.info(RESETMARKER, "[PLAY-reset] Received PLAY-phase S2CReset (Ambassador 1.5.x style)");
+		Minecraft mc = Minecraft.getInstance();
+		mc.execute(() -> {
+			long startTime = System.currentTimeMillis();
+			sendMessage("Початок очищення (PLAY)...");
+			SeamlessTransition.resetMarkers();
+
+			long captureStart = System.currentTimeMillis();
+			if (mc.level == null) GameData.revertToFrozen();
+			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
+			SeamlessTransition.begin();
+			SeamlessTransition.softClear = true;
+			try {
+				mc.clearLevel(transitionScreen);
+			} finally {
+				SeamlessTransition.softClear = false;
+			}
+			sendMessage("Очищення рівня: " + (System.currentTimeMillis() - captureStart) + " мс");
+
+			try {
+				connection.channel().pipeline().remove("forge:forge_fixes");
+				connection.channel().pipeline().remove("forge:vanilla_filter");
+			} catch (NoSuchElementException ignored) {}
+
+			NetworkHooks.registerClientLoginChannel(connection);
+			connection.setProtocol(ConnectionProtocol.LOGIN);
+			connection.setListener(new ClientHandshakePacketListenerImpl(
+				connection, mc, null, null, false, Duration.ZERO, statusMessage -> {}
+			));
+			mc.pendingConnection = connection;
+
+			try {
+				handshakeChannel.reply(
+					new HandshakeMessages.C2SAcknowledge(),
+					(NetworkEvent.Context) contextConstructor.newInstance(connection, NetworkDirection.LOGIN_TO_CLIENT, 98)
+				);
+				logger.info(RESETMARKER, "[PLAY-reset] Sent C2SAcknowledge to Ambassador");
+			} catch (Exception e) {
+				logger.error(RESETMARKER, "[PLAY-reset] Failed to send ACK: " + e.getMessage());
+			}
+
+			sendMessage("Загальний час (PLAY reset): " + (System.currentTimeMillis() - startTime) + " мс");
+		});
+	}
+
 	public static void handleReset(HandshakeHandler handler, S2CReset msg, Supplier<NetworkEvent.Context> contextSupplier) {
 		NetworkEvent.Context context = contextSupplier.get();
 		Connection connection = context.getNetworkManager();
