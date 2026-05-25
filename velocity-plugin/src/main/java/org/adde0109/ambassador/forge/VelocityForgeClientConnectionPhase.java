@@ -195,7 +195,20 @@ public enum VelocityForgeClientConnectionPhase implements ClientConnectionPhase 
       player.sendMessage(Component.text("Scanning modlist for client reset mods"));
     }
     if (player.getModInfo().isPresent()) {
-      if (player.getModInfo().get().getMods().stream().anyMatch((mod -> mod.getId().equals("clientresetpacket")))) {
+      // Log every channel/mod ID at INFO level so we can see what the
+      // proxy actually receives for a given player. Helps diagnose
+      // "Phase 1 not activating" issues.
+      String allMods = player.getModInfo().get().getMods().stream()
+              .map(m -> m.getId()).reduce((a, b) -> a + "," + b).orElse("(none)");
+      Ambassador.getInstance().logger.info("[crp-detect] player={} channels/mods=[{}]",
+              player.getUsername(), allMods);
+      // Match exactly "clientresetpacket" (mod ID style, 1.4.x) OR any
+      // channel ID whose namespace is "clientresetpacket" (1.5.x style,
+      // e.g. "clientresetpacket:main").
+      if (player.getModInfo().get().getMods().stream().anyMatch(
+              (mod -> mod.getId().equals("clientresetpacket")
+                   || mod.getId().startsWith("clientresetpacket:")))) {
+        Ambassador.getInstance().logger.info("[crp-detect] player={} → CRP", player.getUsername());
         return ClientResetType.CRP;
       } else if (Ambassador.getInstance().config.getServerSwitchCancellationTime() >= 0 &&
               player.getModInfo().get().getMods().stream().anyMatch((mod -> mod.getId().equals("serverredirect")
@@ -203,6 +216,8 @@ public enum VelocityForgeClientConnectionPhase implements ClientConnectionPhase 
               && player.getVirtualHost().isPresent()) {
         return ClientResetType.SR;
       }
+    } else {
+      Ambassador.getInstance().logger.info("[crp-detect] player={} modInfo absent", player.getUsername());
     }
     return ClientResetType.NONE;
   }

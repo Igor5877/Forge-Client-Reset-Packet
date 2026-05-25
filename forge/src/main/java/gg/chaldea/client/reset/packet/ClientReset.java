@@ -33,10 +33,12 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.util.ObfuscationReflectionHelper;
 import net.minecraftforge.network.HandshakeHandler;
 import net.minecraftforge.network.HandshakeMessages;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.NetworkConstants;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkEvent;
 import net.minecraftforge.network.NetworkHooks;
+import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 import net.minecraftforge.registries.GameData;
 
@@ -49,6 +51,19 @@ public class ClientReset {
 	static final Marker RESETMARKER = MarkerManager.getMarker("RESETPACKET").setParents(MarkerManager.getMarker("FMLNETWORK"));
 
 	public static SimpleChannel handshakeChannel;
+
+	/**
+	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
+	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
+	 * carries no real packets — its mere presence in the client's channel list
+	 * (forwarded by Forge as part of the standard channel registration handshake)
+	 * is enough for Ambassador.getResetType() to return ClientResetType.CRP.
+	 *
+	 * Without this, Ambassador 1.5.x falls back to kick-reset / disconnect,
+	 * bypassing our soft-clearLevel optimization entirely.
+	 */
+	public static SimpleChannel crpDetectionChannel;
+	private static final String CRP_DETECTION_VERSION = "1";
 
 	/**
 	 * The last registry hash received from the server via S2CHashChallenge.
@@ -107,6 +122,18 @@ public class ClientReset {
 						.add();
 				logger.info(RESETMARKER, "Registered hash-challenge packets (IDs 96/97).");
 			}
+
+			// Register a dummy SimpleChannel "clientresetpacket:main" so Forge
+			// announces it via the standard channel-register flow. Ambassador
+			// 1.5.x reads this channel list via PlayerChannelRegisterEvent and
+			// uses it for CRP capability detection.
+			crpDetectionChannel = NetworkRegistry.ChannelBuilder
+					.named(new ResourceLocation("clientresetpacket", "main"))
+					.networkProtocolVersion(() -> CRP_DETECTION_VERSION)
+					.clientAcceptedVersions(v -> true)
+					.serverAcceptedVersions(v -> true)
+					.simpleChannel();
+			logger.info(RESETMARKER, "Registered detection channel 'clientresetpacket:main' for Ambassador 1.5.x");
 		}
 		catch (Exception e) {
 			logger.error(RESETMARKER, "Caught exception when attempting to utilize FML's handshake. Disabling mod. Exception: " + e.getMessage());
