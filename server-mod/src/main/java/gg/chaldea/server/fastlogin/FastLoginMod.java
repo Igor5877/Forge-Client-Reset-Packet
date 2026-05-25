@@ -130,6 +130,46 @@ public class FastLoginMod {
         dumpRegistryFingerprint();
     }
 
+    private static volatile java.lang.reflect.Field SNAPSHOT_IDS_FIELD = null;
+    private static volatile boolean SNAPSHOT_IDS_FIELD_RESOLVED = false;
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<net.minecraft.resources.ResourceLocation, Integer>
+            reflectSnapshotIds(net.minecraftforge.registries.ForgeRegistry.Snapshot snap) {
+        if (!SNAPSHOT_IDS_FIELD_RESOLVED) {
+            synchronized (FastLoginMod.class) {
+                if (!SNAPSHOT_IDS_FIELD_RESOLVED) {
+                    for (String name : new String[]{"ids", "f_ids", "entries"}) {
+                        try {
+                            java.lang.reflect.Field f = snap.getClass().getDeclaredField(name);
+                            f.setAccessible(true);
+                            if (java.util.Map.class.isAssignableFrom(f.getType())) {
+                                SNAPSHOT_IDS_FIELD = f;
+                                break;
+                            }
+                        } catch (NoSuchFieldException ignored) {}
+                    }
+                    if (SNAPSHOT_IDS_FIELD == null) {
+                        for (java.lang.reflect.Field f : snap.getClass().getDeclaredFields()) {
+                            if (java.util.Map.class.isAssignableFrom(f.getType())) {
+                                f.setAccessible(true);
+                                SNAPSHOT_IDS_FIELD = f;
+                                break;
+                            }
+                        }
+                    }
+                    SNAPSHOT_IDS_FIELD_RESOLVED = true;
+                }
+            }
+        }
+        if (SNAPSHOT_IDS_FIELD == null) return java.util.Collections.emptyMap();
+        try {
+            return (java.util.Map<net.minecraft.resources.ResourceLocation, Integer>) SNAPSHOT_IDS_FIELD.get(snap);
+        } catch (IllegalAccessException e) {
+            return java.util.Collections.emptyMap();
+        }
+    }
+
     private static void dumpRegistryFingerprint() {
         try {
             java.util.Map<net.minecraft.resources.ResourceLocation,
@@ -144,9 +184,8 @@ public class FastLoginMod {
                                      net.minecraftforge.registries.ForgeRegistry.Snapshot> e : sorted.entrySet()) {
                 md.update(e.getKey().toString().getBytes());
                 md.update((byte) '|');
-                java.util.Map<net.minecraft.resources.ResourceLocation, Integer> ids = e.getValue().ids;
-                java.util.TreeMap<net.minecraft.resources.ResourceLocation, Integer> idsSorted =
-                    new java.util.TreeMap<>(ids);
+                java.util.Map<net.minecraft.resources.ResourceLocation, Integer> ids = reflectSnapshotIds(e.getValue());
+                java.util.TreeMap<net.minecraft.resources.ResourceLocation, Integer> idsSorted = new java.util.TreeMap<>(ids);
                 for (java.util.Map.Entry<net.minecraft.resources.ResourceLocation, Integer> idEntry : idsSorted.entrySet()) {
                     md.update(idEntry.getKey().toString().getBytes());
                     md.update((byte) '=');
