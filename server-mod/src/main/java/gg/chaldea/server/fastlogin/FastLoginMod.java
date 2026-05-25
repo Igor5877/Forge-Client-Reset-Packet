@@ -125,6 +125,43 @@ public class FastLoginMod {
     private static void onServerStarted(ServerStartedEvent event) {
         // Compute registry hash after all mods have registered everything
         RegistryHashUtil.computeAndCache();
+        // Phase 3 diagnostic — dump server-side fingerprint so we can compare
+        // backends (lobby vs island) and confirm whether ID-sync is even needed.
+        dumpRegistryFingerprint();
+    }
+
+    private static void dumpRegistryFingerprint() {
+        try {
+            java.util.Map<net.minecraft.resources.ResourceLocation,
+                          net.minecraftforge.registries.ForgeRegistry.Snapshot> snap =
+                net.minecraftforge.registries.RegistryManager.ACTIVE.takeSnapshot(false);
+            java.util.TreeMap<net.minecraft.resources.ResourceLocation,
+                              net.minecraftforge.registries.ForgeRegistry.Snapshot> sorted =
+                new java.util.TreeMap<>(snap);
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            StringBuilder summary = new StringBuilder();
+            for (java.util.Map.Entry<net.minecraft.resources.ResourceLocation,
+                                     net.minecraftforge.registries.ForgeRegistry.Snapshot> e : sorted.entrySet()) {
+                md.update(e.getKey().toString().getBytes());
+                md.update((byte) '|');
+                java.util.Map<net.minecraft.resources.ResourceLocation, Integer> ids = e.getValue().ids;
+                java.util.TreeMap<net.minecraft.resources.ResourceLocation, Integer> idsSorted =
+                    new java.util.TreeMap<>(ids);
+                for (java.util.Map.Entry<net.minecraft.resources.ResourceLocation, Integer> idEntry : idsSorted.entrySet()) {
+                    md.update(idEntry.getKey().toString().getBytes());
+                    md.update((byte) '=');
+                    md.update(idEntry.getValue().toString().getBytes());
+                    md.update((byte) ',');
+                }
+                md.update((byte) '\n');
+                summary.append("  ").append(e.getKey()).append(" → ").append(ids.size()).append(" entries\n");
+            }
+            String fp = com.google.common.io.BaseEncoding.base16().lowerCase().encode(md.digest());
+            LOGGER.info("[FastLogin/RegDump] Server-side registry fingerprint: {}", fp);
+            LOGGER.info("[FastLogin/RegDump] {} registries breakdown:\n{}", sorted.size(), summary);
+        } catch (Exception e) {
+            LOGGER.warn("[FastLogin/RegDump] Failed to compute fingerprint: {}", e.getMessage());
+        }
     }
 
     /**
