@@ -7,7 +7,7 @@ import com.velocitypowered.proxy.connection.client.HandshakeSessionHandler;
 import com.velocitypowered.proxy.network.Connections;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.StateRegistry;
-import com.velocitypowered.proxy.protocol.packet.Handshake;
+import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
 import io.netty.buffer.ByteBuf;
 import org.adde0109.ambassador.forge.ForgeConstants;
 
@@ -22,23 +22,21 @@ public class VelocityHandshakeSessionHandler extends HandshakeSessionHandler  {
   }
 
   @Override
-  public boolean handle(Handshake handshake) {
+  public boolean handle(HandshakePacket handshake) {
     handshake.handle(original);
     if (connection.getType() == ConnectionTypes.VANILLA) {
       final String[] markerSplit = handshake.getServerAddress().split("\0");
-      if (connection.getState() == StateRegistry.LOGIN && markerSplit.length > 1) {
+      if (connection.getState() == StateRegistry.LOGIN && markerSplit.length > 1 && markerSplit[1].startsWith("FML")) {
         switch (markerSplit[1]) {
           case "FML2":
             connection.setType(ForgeConstants.ForgeFML2);
-            connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.SERVER_SUCCESS_LISTENER, new OutboundSuccessHolder());
-            connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.PLUGIN_PACKET_QUEUE, new ClientPacketQueue(StateRegistry.LOGIN));
             break;
           case "FML3":
             connection.setType(ForgeConstants.ForgeFML3);
-            connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.SERVER_SUCCESS_LISTENER, new OutboundSuccessHolder());
-            connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.PLUGIN_PACKET_QUEUE, new ClientPacketQueue(StateRegistry.LOGIN));
             break;
         }
+        connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.SERVER_SUCCESS_LISTENER, new OutboundSuccessHolder());
+        connection.getChannel().pipeline().addAfter(Connections.MINECRAFT_ENCODER,ForgeConstants.PLUGIN_PACKET_QUEUE, new ClientPacketQueue(StateRegistry.LOGIN));
       }
     }
     return true;

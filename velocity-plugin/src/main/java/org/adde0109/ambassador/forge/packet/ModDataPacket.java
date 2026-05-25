@@ -1,28 +1,29 @@
 package org.adde0109.ambassador.forge.packet;
 
+import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
-public class GenericForgeLoginWrapperPacket<T extends Context> implements IForgeLoginWrapperPacket<T> {
-
+public class ModDataPacket implements IForgeLoginWrapperPacket<Context> {
   private final byte[] content;
-  private final T context;
+  private final Context context;
 
-  public GenericForgeLoginWrapperPacket(byte[] content, T context) {
+  ModDataPacket(byte[] content, Context context) {
     this.content = content;
     this.context = context;
   }
 
 
-  static public GenericForgeLoginWrapperPacket<?> read(ByteBuf input, Context context) {
+  static public ModDataPacket read(ByteBuf input, Context context) {
     byte[] content = new byte[input.readableBytes()];
     input.readBytes(content);
-    return new GenericForgeLoginWrapperPacket<>(content, context);
+    return new ModDataPacket(content, context);
   }
 
   @Override
   public ByteBuf encode() {
     ByteBuf buf = Unpooled.buffer();
+    ProtocolUtils.writeVarInt(buf, 5); //PacketID
     buf.writeBytes(content);
     return buf;
   }
@@ -32,8 +33,7 @@ public class GenericForgeLoginWrapperPacket<T extends Context> implements IForge
   }
 
   @Override
-  public T getContext() {
+  public Context getContext() {
     return context;
   }
-
 }

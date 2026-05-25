@@ -19,15 +19,18 @@ import java.util.Map;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.network.ConnectionManager;
 import com.velocitypowered.proxy.protocol.StateRegistry;
+import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
 import com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentIdentifier;
 import com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentPropertyRegistry;
 import com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentPropertySerializer;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
-import org.adde0109.ambassador.cache.RegistryPacketCache;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.adde0109.ambassador.velocity.VelocityBackendChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityServerChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityEventHandler;
@@ -43,11 +46,11 @@ import java.util.concurrent.TimeUnit;
 import static com.velocitypowered.api.network.ProtocolVersion.MINECRAFT_1_19;
 import static com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentIdentifier.mapSet;
 
-@Plugin(id = "ambassador", name = "Ambassador", version = "1.4.5-cache", authors = {"adde0109", "Chaldea CRP"})
+@Plugin(id = "ambassador", name = "Ambassador", version = "1.5.3-beta", authors = {"adde0109"})
 public class Ambassador {
 
   //Don't forget to update checkCompatibleVersion() when changing this value
-  private static final String minVelocityVersion = "velocity-3.2.0-SNAPSHOT-266";
+  private static final String minVelocityVersion = "velocity-3.3.0-SNAPSHOT-330";
 
   public ProxyServer server;
   public final Logger logger;
@@ -55,7 +58,6 @@ public class Ambassador {
   private final Path dataDirectory;
 
   public AmbassadorConfig config;
-  public RegistryPacketCache packetCache;
 
   private static final MapWithExpiration<String, RegisteredServer> TEMPORARY_FORCED = new MapWithExpiration<>();
 
@@ -77,11 +79,11 @@ public class Ambassador {
   boolean checkCompatibleVersion() {
     //Update this when changing minVelocityVersion
     try {
-      MinecraftConnection.class.getDeclaredMethod("setActiveSessionHandler", StateRegistry.class);
-    } catch (NoSuchMethodException e) {
-      return false;
+      Class.forName("com.velocitypowered.proxy.protocol.packet.DisconnectPacket");
+    } catch (ClassNotFoundException e) {
+        throw new RuntimeException(e);
     }
-    return true;
+      return true;
   }
 
   @Subscribe(order = PostOrder.LAST)
@@ -98,9 +100,6 @@ public class Ambassador {
 
       Path configPath = dataDirectory.resolve("Ambassador.toml");
       config = AmbassadorConfig.read(configPath);
-      config.validate();
-
-      packetCache = new RegistryPacketCache(logger);
 
       inject();
 
@@ -115,7 +114,6 @@ public class Ambassador {
     try {
       Path configPath = dataDirectory.resolve("Ambassador.toml");
       final AmbassadorConfig newconfig = AmbassadorConfig.read(configPath);
-      newconfig.validate();
 
       config = newconfig;
     } catch (Exception e) {
@@ -156,6 +154,16 @@ public class Ambassador {
 
   public static MapWithExpiration<String, RegisteredServer> getTemporaryForced() {
     return TEMPORARY_FORCED;
+  }
+
+  public void reconnectSwitchPlayer(ConnectedPlayer player) {
+    TEMPORARY_FORCED.put(player.getUsername(), player.getConnectionInFlight().getServer(),
+            config.getServerSwitchCancellationTime(), TimeUnit.SECONDS);
+
+    MiniMessage mm = MiniMessage.miniMessage();
+    Component parsed = mm.deserialize(config.getKickReconnectMessageString());
+
+    player.disconnect(parsed);
   }
 
   private void initMetrics() {

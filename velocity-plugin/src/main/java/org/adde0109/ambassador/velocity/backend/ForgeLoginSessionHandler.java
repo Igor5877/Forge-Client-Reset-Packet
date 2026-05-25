@@ -6,9 +6,9 @@ import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
 import com.velocitypowered.proxy.connection.backend.*;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
-import com.velocitypowered.proxy.protocol.packet.Disconnect;
-import com.velocitypowered.proxy.protocol.packet.LoginPluginMessage;
-import com.velocitypowered.proxy.protocol.packet.ServerLoginSuccess;
+import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
+import com.velocitypowered.proxy.protocol.packet.LoginPluginMessagePacket;
+import com.velocitypowered.proxy.protocol.packet.ServerLoginSuccessPacket;
 import com.velocitypowered.proxy.util.except.QuietRuntimeException;
 import io.netty.buffer.Unpooled;
 import org.adde0109.ambassador.forge.*;
@@ -26,71 +26,33 @@ public class ForgeLoginSessionHandler implements MinecraftSessionHandler {
   }
 
   @Override
-  public boolean handle(LoginPluginMessage packet) {
-    if (packet.getChannel().equals("fml:loginwrapper")) {
-      if (serverConnection.getPhase() == BackendConnectionPhases.UNKNOWN) {
-        VelocityForgeBackendConnectionPhase.NOT_STARTED.handle(serverConnection,serverConnection.getPlayer(),packet);
-      } else if (serverConnection.getPhase() instanceof VelocityForgeBackendConnectionPhase phase1) {
-        phase1.handle(serverConnection,serverConnection.getPlayer(),packet);
-      }
-      return true;
-    }
-    return original.handle(packet);
-  }
-
-  @Override
-  public boolean handle(ServerLoginSuccess packet) {
+  public boolean handle(ServerLoginSuccessPacket packet) {
     if ((serverConnection.getPhase() instanceof VelocityForgeBackendConnectionPhase phase)) {
       phase.onLoginSuccess(serverConnection,serverConnection.getPlayer());
     }
-    original.handle(packet);
-    if (serverConnection.getConnection() == null) {
-      return true;
+
+    original.handle(packet);  //Can lead to disconnect.
+
+    //If we are still connected after handling that package.
+    if (serverConnection.getConnection() != null) {
+      ConnectedPlayer player = serverConnection.getPlayer();
+
+      VelocityForgeClientConnectionPhase clientPhase = (VelocityForgeClientConnectionPhase) player.getPhase();
+      clientPhase.complete(player);
     }
-    ConnectedPlayer player = serverConnection.getPlayer();
-    if (!(serverConnection.getConnection().getType() instanceof ForgeFMLConnectionType)) {
-      if (player.getConnectedServer() == null ||
-              player.getConnectedServer().getConnection().getType() instanceof ForgeFMLConnectionType) {
-        //Initial Vanilla
-        //Forge -> vanilla
-        player.getPhase().resetConnectionPhase(player);
-        player.getConnectionInFlight().getConnection().getChannel().config().setAutoRead(false);
-      }
-    } else {
-      ((VelocityForgeClientConnectionPhase) player.getPhase()).complete(player);
-    }
+
     return true;
   }
 
 
 
   @Override
-  public boolean handle(Disconnect packet) {
-    if (!serverConnection.getPlayer().getPhase().consideredComplete()) {
-      serverConnection.getPlayer().handleConnectionException(serverConnection.getServer(), packet, false);
-      return true;
-    }
+  public boolean handle(DisconnectPacket packet) {
     return original.handle(packet);
   }
 
   @Override
   public void disconnected() {
-    //Same as default just not safe.
-    if (!serverConnection.getPlayer().getPhase().consideredComplete()) {
-      if (server.getConfiguration().getPlayerInfoForwardingMode() == PlayerInfoForwarding.LEGACY) {
-        serverConnection.getPlayer().handleConnectionException(serverConnection.getServer(),
-                new QuietRuntimeException("The connection to the remote server was unexpectedly closed.\n"
-                        + "This is usually because the remote server does not have BungeeCord IP forwarding "
-                        + "correctly enabled.\nSee https://velocitypowered.com/wiki/users/forwarding/ "
-                        + "for instructions on how to configure player info forwarding correctly."),
-        false);
-      } else {
-        serverConnection.getPlayer().handleConnectionException(serverConnection.getServer(),
-                new QuietRuntimeException("The connection to the remote server was unexpectedly closed."),
-        false);
-      }
-      return;
-    }
       original.disconnected();
   }
 

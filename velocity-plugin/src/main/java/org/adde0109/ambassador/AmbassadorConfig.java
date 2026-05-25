@@ -7,86 +7,126 @@ import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
+import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 public class AmbassadorConfig {
 
+    @Expose
+    private int serverSwitchCancellationTime = 30;
 
-  @Expose
-  private String disconnectResetMessage = "Please reconnect";
+    @Expose
+    private boolean silenceWarnings = false;
+    @Expose
+    private boolean bypassRegistryCheck = false;
+    @Expose
+    private boolean bypassModCheck = false;
 
-  @Expose
-  private int serverSwitchCancellationTime = 120;
+    @Expose
+    private boolean debugMode = false;
 
-  @Expose
-  private boolean silenceWarnings = false;
+    @Expose
+    private boolean enableKickReset = false;
 
-  private net.kyori.adventure.text.@MonotonicNonNull Component messageAsAsComponent;
+    @Expose
+    private String kickReconnectMessageString = "<red>Please reconnect.</red>";
 
-  private AmbassadorConfig(String kickResetMessage, int serverSwitchCancellationTime, boolean silenceWarnings) {
-    this.disconnectResetMessage = kickResetMessage;
-    this.serverSwitchCancellationTime = serverSwitchCancellationTime;
-    this.silenceWarnings = silenceWarnings;
-  };
-
-  public void validate() {
-    if (serverSwitchCancellationTime <= 0) {
-      throw new InvalidValueException("'server-switch-cancellation-time' can't be less than nor equal to zero: server-switch-cancellation-time=" + serverSwitchCancellationTime);
-    }
-  }
-
-  public static AmbassadorConfig read(Path path) {
-    URL defaultConfigLocation = AmbassadorConfig.class.getClassLoader()
-            .getResource("default-ambassador.toml");
-    if (defaultConfigLocation == null) {
-      throw new RuntimeException("Default configuration file does not exist.");
+    private AmbassadorConfig(boolean silenceWarnings, boolean bypassRegistryCheck, boolean bypassModCheck,
+                             boolean debugMode, boolean enableKickReset, String kickReconnectMessageString) {
+        this.silenceWarnings = silenceWarnings;
+        this.bypassRegistryCheck = bypassRegistryCheck;
+        this.bypassModCheck = bypassModCheck;
+        this.debugMode = debugMode;
+        this.enableKickReset = enableKickReset;
+        this.kickReconnectMessageString = kickReconnectMessageString;
     }
 
-    CommentedFileConfig config = CommentedFileConfig.builder(path)
-            .defaultData(defaultConfigLocation)
-            .autosave()
-            .preserveInsertionOrder()
-            .sync()
-            .build();
-    config.load();
+    public static AmbassadorConfig read(Path path) throws IOException {
+        URL defaultConfigLocation = AmbassadorConfig.class.getClassLoader()
+                .getResource("default-ambassador.toml");
+        if (defaultConfigLocation == null) {
+            throw new RuntimeException("Default configuration file does not exist.");
+        }
 
-    double configVersion;
-    try {
-      configVersion = Double.parseDouble(config.getOrElse("config-version", "1.0"));
-    } catch (NumberFormatException e) {
-      configVersion = 1.0;
+        CommentedFileConfig config = CommentedFileConfig.builder(path)
+                .defaultData(defaultConfigLocation)
+                .autosave()
+                .preserveInsertionOrder()
+                .sync()
+                .build();
+        config.load();
+
+        double configVersion;
+        try {
+            configVersion = Double.parseDouble(config.getOrElse("config-version", "1.0"));
+        } catch (NumberFormatException e) {
+            configVersion = 1.0;
+        }
+
+        boolean silenceWarnings = config.getOrElse("silence-warnings", false);
+
+        int serverSwitchCancellationTime = config.getOrElse("serverRedirectTimeout", 30);
+
+        boolean bypassRegistryCheck = config.getOrElse("bypass-registry-checks", false);
+
+        boolean bypassModCheck = config.getOrElse("bypass-mod-checks", false);
+
+        boolean debugMode = config.getOrElse("debug-mode", false);
+
+        String kickReconnectMessageString = config.getOrElse("disconnect-reset-message",
+                config.getOrElse("reconnect-message", "<red>Please reconnect.</red>"));
+
+        //Upgrade config
+        if (configVersion <= 2.0) {
+            Files.delete(path);
+            config = CommentedFileConfig.builder(path)
+                    .defaultData(defaultConfigLocation)
+                    .autosave()
+                    .preserveInsertionOrder()
+                    .sync()
+                    .build();
+            config.load();
+            config.set("silence-warnings", silenceWarnings);
+            config.set("serverRedirectTimeout", serverSwitchCancellationTime);
+            config.set("bypass-registry-checks", bypassRegistryCheck);
+            config.set("bypass-mod-checks", bypassModCheck);
+            config.set("debug-mode", debugMode);
+            config.set("reconnect-message", kickReconnectMessageString);
+        }
+
+        boolean enableKickReset = config.getOrElse("enable-kick-reset", false);
+
+        return new AmbassadorConfig(silenceWarnings, bypassRegistryCheck, bypassModCheck,
+                debugMode, enableKickReset, kickReconnectMessageString);
     }
 
-    if (configVersion < 1.1) {
-      config.set("silence-warnings", false);
-      config.set("config-version", "1.2");
+    public int getServerSwitchCancellationTime() {
+        return serverSwitchCancellationTime;
     }
 
-    String kickResetMessage = config.getOrElse("disconnect-reset-message", "Please reconnect");
-    int serverSwitchCancellationTime = config.getIntOrElse("server-switch-cancellation-time", 120);
-
-    boolean silenceWarnings = config.getOrElse("silence-warnings", false);
-
-    return new AmbassadorConfig(kickResetMessage, serverSwitchCancellationTime, silenceWarnings);
-  }
-
-  public net.kyori.adventure.text.Component getDisconnectResetMessage() {
-    if (messageAsAsComponent == null) {
-      if (disconnectResetMessage.startsWith("{")) {
-        messageAsAsComponent = GsonComponentSerializer.gson().deserialize(disconnectResetMessage);
-      } else {
-        messageAsAsComponent = LegacyComponentSerializer.legacyAmpersand().deserialize(disconnectResetMessage);
-      }
+    public boolean isSilenceWarnings() {
+        return silenceWarnings;
     }
-    return messageAsAsComponent;
-  }
 
-  public int getServerSwitchCancellationTime() {
-    return serverSwitchCancellationTime;
-  }
+    public boolean isBypassRegistryCheck() {
+        return bypassRegistryCheck;
+    }
 
-  public boolean isSilenceWarnings() {
-    return silenceWarnings;
-  }
+    public boolean isBypassModCheck() {
+        return bypassModCheck;
+    }
+
+    public boolean isDebugMode() {
+        return debugMode;
+    }
+
+    public boolean isEnableKickReset() {
+        return enableKickReset;
+    }
+
+    public String getKickReconnectMessageString() {
+        return kickReconnectMessageString;
+    }
 }
