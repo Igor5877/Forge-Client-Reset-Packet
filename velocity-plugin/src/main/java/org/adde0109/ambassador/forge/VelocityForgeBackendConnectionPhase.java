@@ -34,6 +34,14 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
     public void onLoginSuccess(VelocityServerConnection serverCon, ConnectedPlayer player) {
       serverCon.setConnectionPhase(VelocityForgeBackendConnectionPhase.COMPLETE);
 
+      long[] t = SWITCH_TIMING.remove(player.getUniqueId());
+      if (t != null) {
+        Ambassador.getInstance().logger.info(
+            "[crp-timing] player={} server={} EVENT=login_success TOTAL_HANDSHAKE_MS={}",
+            player.getUsername(), serverCon.getServerInfo().getName(),
+            System.currentTimeMillis() - t[0]);
+      }
+
       serverCon.getConnection().getChannel().pipeline().addBefore(Connections.MINECRAFT_DECODER,
               ForgeConstants.COMMAND_ERROR_CATCHER,
               new CommandDecoderErrorCatcher(serverCon.getConnection().getProtocolVersion(),player));
@@ -59,6 +67,13 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
   public ForgeHandshake handshake = new ForgeHandshake();
   CountDownLatch remainingRegistries;
 
+  // Diagnostic counters (Phase 3 investigation) — instance fields stored on
+  // VelocityServerConnection via Velocity API would be cleaner, but enum
+  // constants are singletons so we use clientPhase.forgeHandshake's last-seen
+  // timing via a static map keyed by player UUID.
+  private static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, long[]> SWITCH_TIMING =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
   VelocityForgeBackendConnectionPhase() {
   }
 
@@ -80,9 +95,36 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
       //Initial Forge
       if (message instanceof ModListPacket modListPacket) {
         clientPhase.forgeHandshake = new ForgeHandshake();
+        // Stamp start of fresh handshake for this player
+        long[] t = new long[]{System.currentTimeMillis(), 0L};
+        SWITCH_TIMING.put(player.getUniqueId(), t);
+        Ambassador.getInstance().logger.info(
+            "[crp-timing] player={} server={} EVENT=modlist expecting={} (handshake start)",
+            player.getUsername(), server.getServerInfo().getName(),
+            modListPacket.getRegistries().size());
       }
       if (message instanceof RegistryPacket registryPacket) {
         clientPhase.forgeHandshake.addRegistry(registryPacket);
+        long[] t = SWITCH_TIMING.get(player.getUniqueId());
+        if (t != null) {
+          long now = System.currentTimeMillis();
+          long sinceStart = now - t[0];
+          long sinceLast = t[1] == 0L ? 0 : now - t[1];
+          t[1] = now;
+          Ambassador.getInstance().logger.info(
+              "[crp-timing] player={} server={} EVENT=registry name={} since_start_ms={} since_last_ms={}",
+              player.getUsername(), server.getServerInfo().getName(),
+              registryPacket.getRegistryName(), sinceStart, sinceLast);
+        }
+      }
+      if (message instanceof ConfigDataPacket) {
+        long[] t = SWITCH_TIMING.get(player.getUniqueId());
+        if (t != null) {
+          Ambassador.getInstance().logger.info(
+              "[crp-timing] player={} server={} EVENT=configdata since_start_ms={}",
+              player.getUsername(), server.getServerInfo().getName(),
+              System.currentTimeMillis() - t[0]);
+        }
       }
       player.getConnection().write(message);
     } else {
