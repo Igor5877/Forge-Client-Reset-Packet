@@ -1,0 +1,3 @@
+[submodule "velocity-plugin/Velocity"]
+	path = velocity-plugin/Velocity
+	url = https://github.com/PaperMC/Velocity.git
