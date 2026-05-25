@@ -15,6 +15,7 @@
     "MixinLevelRenderer",
     "MixinClientLoginPacketListener",
     "MixinClientPacketListenerFix",
-    "MixinClientPacketListenerReset"
+    "MixinClientPacketListenerReset",
+    "MixinHandshakeHandlerCache"
   ]
 }
