@@ -12,6 +12,7 @@
   ],
   "client": [
     "MixinMinecraft",
+    "MixinLevelRenderer",
     "MixinClientLoginPacketListener",
     "MixinClientPacketListenerFix"
   ]

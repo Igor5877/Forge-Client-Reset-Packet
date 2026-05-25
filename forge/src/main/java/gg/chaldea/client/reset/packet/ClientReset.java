@@ -229,6 +229,7 @@ public static boolean handleClear(NetworkEvent.Context context) {
 
         FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
         SeamlessTransition.begin();
+        SeamlessTransition.keepChunkBuffers = true;
         SeamlessTransition.softClear = true;
         try {
             mc.clearLevel(transitionScreen);
