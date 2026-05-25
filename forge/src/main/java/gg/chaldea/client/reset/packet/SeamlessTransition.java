@@ -11,6 +11,9 @@ public class SeamlessTransition {
     public static volatile boolean softClear = false;
 
     // Timing markers — populated by mixins so we can compute deltas in logs.
+    // Reset to 0L at the start of each reset cycle (ClientReset.handleClear)
+    // so each transition gets fresh deltas instead of only the first one.
+    public static volatile long tReset = 0L;
     public static volatile long tLoginSuccess = 0L;
     public static volatile long tFirstChunk = 0L;
 
@@ -20,5 +23,12 @@ public class SeamlessTransition {
 
     public static void end() {
         active = false;
+    }
+
+    /** Reset all per-cycle markers. Called from ClientReset.handleClear. */
+    public static void resetMarkers() {
+        tReset = System.nanoTime();
+        tLoginSuccess = 0L;
+        tFirstChunk = 0L;
     }
 }

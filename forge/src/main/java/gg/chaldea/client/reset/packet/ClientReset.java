@@ -220,6 +220,7 @@ public static boolean handleClear(NetworkEvent.Context context) {
     long startTime = System.currentTimeMillis();
     sendMessage("Початок очищення...");
 
+    SeamlessTransition.resetMarkers();
     CompletableFuture<Void> future = context.enqueueWork(() -> {
         long captureStart = System.currentTimeMillis();
 

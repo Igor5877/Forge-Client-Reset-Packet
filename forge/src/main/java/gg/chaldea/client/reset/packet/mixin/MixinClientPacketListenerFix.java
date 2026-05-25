@@ -25,8 +25,11 @@ public class MixinClientPacketListenerFix {
     private void onChunkReceived(ClientboundLevelChunkWithLightPacket packet, CallbackInfo ci) {
         if (SeamlessTransition.tFirstChunk == 0L && SeamlessTransition.tLoginSuccess != 0L) {
             SeamlessTransition.tFirstChunk = System.nanoTime();
-            long ms = (SeamlessTransition.tFirstChunk - SeamlessTransition.tLoginSuccess) / 1_000_000L;
-            LOGGER.info("[FastLogin][T5] first_chunk delta_since_login_success_ms={}", ms);
+            long sinceLogin = (SeamlessTransition.tFirstChunk - SeamlessTransition.tLoginSuccess) / 1_000_000L;
+            long sinceReset = SeamlessTransition.tReset == 0L ? -1L
+                : (SeamlessTransition.tFirstChunk - SeamlessTransition.tReset) / 1_000_000L;
+            LOGGER.info("[FastLogin][T5] first_chunk since_login_ms={} since_reset_ms={}",
+                sinceLogin, sinceReset);
         }
         checkAndCloseLoadingScreen();
     }
