@@ -48,7 +48,18 @@ import java.util.function.Supplier;
 public abstract class MixinHandshakeHandlerCache {
 
     private static final Logger LOGGER = LogManager.getLogger("CRP/RegCache");
-    private static volatile String crp$lastInjectedFingerprint = null;
+    static volatile String crp$lastInjectedFingerprint = null;
+
+    /** Called by MixinGameDataRevertToFrozen when GameData is being reset to
+     *  its frozen state — any cached fingerprint becomes invalid because the
+     *  GameData state we cached against has been wiped. */
+    public static void crp$invalidate(String reason) {
+        if (crp$lastInjectedFingerprint != null) {
+            LOGGER.info("[RegCache] INVALIDATED (reason: {}) — was {}", reason,
+                    crp$lastInjectedFingerprint.substring(0, 12) + "…");
+            crp$lastInjectedFingerprint = null;
+        }
+    }
 
     @Shadow private Map<ResourceLocation, ForgeRegistry.Snapshot> registrySnapshots;
 
