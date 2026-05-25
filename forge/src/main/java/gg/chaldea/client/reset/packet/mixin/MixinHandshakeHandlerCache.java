@@ -1,6 +1,7 @@
 package gg.chaldea.client.reset.packet.mixin;
 
 import com.google.common.io.BaseEncoding;
+import gg.chaldea.client.reset.packet.RegistryCacheState;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.HandshakeHandler;
 import net.minecraftforge.network.NetworkEvent;
@@ -48,18 +49,9 @@ import java.util.function.Supplier;
 public abstract class MixinHandshakeHandlerCache {
 
     private static final Logger LOGGER = LogManager.getLogger("CRP/RegCache");
-    static volatile String crp$lastInjectedFingerprint = null;
-
-    /** Called by MixinGameDataRevertToFrozen when GameData is being reset to
-     *  its frozen state — any cached fingerprint becomes invalid because the
-     *  GameData state we cached against has been wiped. */
-    public static void crp$invalidate(String reason) {
-        if (crp$lastInjectedFingerprint != null) {
-            LOGGER.info("[RegCache] INVALIDATED (reason: {}) — was {}", reason,
-                    crp$lastInjectedFingerprint.substring(0, 12) + "…");
-            crp$lastInjectedFingerprint = null;
-        }
-    }
+    // Cache state lives in RegistryCacheState (outside the mixin package) because
+    // Mixin 0.8.5 disallows non-private static fields on mixin classes, and we
+    // need MixinGameDataRevertToFrozen to invalidate it on a full disconnect.
 
     @Shadow private Map<ResourceLocation, ForgeRegistry.Snapshot> registrySnapshots;
 
@@ -69,7 +61,7 @@ public abstract class MixinHandshakeHandlerCache {
             return;
         }
         String currentFp = crp$computeFingerprint(registrySnapshots);
-        String cached = crp$lastInjectedFingerprint;
+        String cached = RegistryCacheState.lastInjectedFingerprint;
         if (currentFp.equals(cached)) {
             LOGGER.info("[RegCache] HIT — skipping GameData.injectSnapshot for fingerprint {} ({} registries)",
                     currentFp.substring(0, 12) + "…", registrySnapshots.size());
@@ -86,8 +78,8 @@ public abstract class MixinHandshakeHandlerCache {
         if (cir.getReturnValueZ() && registrySnapshots != null && !registrySnapshots.isEmpty()) {
             String fp = crp$computeFingerprint(registrySnapshots);
             // Avoid redundant store when we returned early via the HEAD inject above.
-            if (!fp.equals(crp$lastInjectedFingerprint)) {
-                crp$lastInjectedFingerprint = fp;
+            if (!fp.equals(RegistryCacheState.lastInjectedFingerprint)) {
+                RegistryCacheState.lastInjectedFingerprint = fp;
                 LOGGER.info("[RegCache] STORED fingerprint {} ({} registries) after fresh injection",
                         fp.substring(0, 12) + "…", registrySnapshots.size());
             }

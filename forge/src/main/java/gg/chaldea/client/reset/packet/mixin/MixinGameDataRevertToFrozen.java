@@ -1,5 +1,6 @@
 package gg.chaldea.client.reset.packet.mixin;
 
+import gg.chaldea.client.reset.packet.RegistryCacheState;
 import net.minecraftforge.registries.GameData;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -23,6 +24,6 @@ public abstract class MixinGameDataRevertToFrozen {
 
     @Inject(method = "revertToFrozen", at = @At("HEAD"))
     private static void crp$invalidateRegistryCache(CallbackInfo ci) {
-        MixinHandshakeHandlerCache.crp$invalidate("GameData.revertToFrozen");
+        RegistryCacheState.invalidate("GameData.revertToFrozen");
     }
 }
