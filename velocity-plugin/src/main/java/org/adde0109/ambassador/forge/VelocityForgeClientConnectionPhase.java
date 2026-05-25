@@ -114,6 +114,17 @@ public enum VelocityForgeClientConnectionPhase implements ClientConnectionPhase 
 
     @Override
     void setResetType(ConnectedPlayer player, ClientResetType resetType) {
+      // Sticky CRP: once a player has been classified CRP-capable, refuse to
+      // downgrade to NONE/UNKNOWN. Without this, a later modInfo overwrite
+      // (e.g. PlayerChannelRegisterEvent with a short channel list) would
+      // cause getResetType() to return NONE on the next switch, sending the
+      // player through kick-reset and breaking the soft-clearLevel path.
+      if (this.resetType == ClientResetType.CRP && resetType != ClientResetType.CRP) {
+        Ambassador.getInstance().logger.info(
+            "[crp-detect] player={} refusing downgrade CRP→{}",
+            player.getUsername(), resetType);
+        return;
+      }
       this.resetType = resetType;
       if (Ambassador.getInstance().config.isDebugMode()) {
         player.sendMessage(Component.text("Reset type: " + this.resetType.toString()));

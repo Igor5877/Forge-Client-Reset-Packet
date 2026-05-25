@@ -68,9 +68,18 @@ public class VelocityEventHandler {
     if (!(player.getConnection().getType() instanceof ForgeFMLConnectionType)) {
       return;
     }
-    player.setModInfo(new ModInfo("Channels", event.getChannels().stream().map((id) -> {
-      return new ModInfo.Mod(id.getId(), "");
-    }).toList()));
+    // BUGFIX: ModInfo may have been set earlier by the ModListReply handler
+    // (type="FML2") with the real Forge mod IDs. PlayerChannelRegisterEvent
+    // fires later (after LoginSuccess) carrying only the subset of channels
+    // declared in the most recent minecraft:register packet — overwriting
+    // here would clobber the FML mod list and break getResetType() on the
+    // next /server switch, falling back to kick-reset and visual chunk
+    // artifacts. Only set modInfo if it isn't already.
+    if (player.getModInfo().isEmpty()) {
+      player.setModInfo(new ModInfo("Channels", event.getChannels().stream().map((id) -> {
+        return new ModInfo.Mod(id.getId(), "");
+      }).toList()));
+    }
 
     VelocityForgeClientConnectionPhase clientPhase = (VelocityForgeClientConnectionPhase) player.getPhase();
     //If reset typ is still unknown, set it!
