@@ -25,6 +25,14 @@ public class FastLoginMod {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
+    /**
+     * Master kill switch for the hash-challenge protocol. When false, the
+     * server-side mixins skip the challenge send and the gather spin-wait,
+     * so backend behaves like vanilla Forge handshake. Flip to true only
+     * once the protocol is fully working end-to-end.
+     */
+    public static final boolean ENABLED = false;
+
     /** Packet IDs – must not clash with CRP (98) or Forge internals. */
     public static final int ID_S2C_CHALLENGE = 96;
     public static final int ID_C2S_RESPONSE  = 97;

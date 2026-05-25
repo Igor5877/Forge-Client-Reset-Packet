@@ -2,6 +2,7 @@ package gg.chaldea.server.fastlogin.mixin;
 
 import gg.chaldea.server.fastlogin.ChannelContext;
 import gg.chaldea.server.fastlogin.ConnectionSkipTracker;
+import gg.chaldea.server.fastlogin.FastLoginMod;
 import io.netty.channel.Channel;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
@@ -49,6 +50,7 @@ public class MixinGameData {
     )
     private static void fl$maybeSkipSnapshot(NetworkDirection direction, boolean isLocal,
                                               CallbackInfoReturnable<List<?>> cir) {
+        if (!FastLoginMod.ENABLED) return;
         // Only intercept server→client login payloads; the C2S direction is not
         // generating registry sync packets.
         if (direction != NetworkDirection.LOGIN_TO_CLIENT) return;

@@ -48,6 +48,7 @@ public abstract class MixinHandshakeHandler {
         remap = false
     )
     private NetworkDirection fl$beforeGather(NetworkDirection direction) {
+        if (!FastLoginMod.ENABLED) return direction;
         // Only act on the server-side LOGIN_TO_CLIENT direction over a real
         // (non-memory) network connection, with the registry hash computed.
         if (direction == NetworkDirection.LOGIN_TO_CLIENT
