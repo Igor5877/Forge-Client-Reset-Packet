@@ -27,6 +27,7 @@ import com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentPropertySeria
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
+import org.adde0109.ambassador.cache.RegistryPacketCache;
 import org.adde0109.ambassador.velocity.VelocityBackendChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityServerChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityEventHandler;
@@ -42,7 +43,7 @@ import java.util.concurrent.TimeUnit;
 import static com.velocitypowered.api.network.ProtocolVersion.MINECRAFT_1_19;
 import static com.velocitypowered.proxy.protocol.packet.brigadier.ArgumentIdentifier.mapSet;
 
-@Plugin(id = "ambassador", name = "Ambassador", version = "1.4.3-beta", authors = {"adde0109"})
+@Plugin(id = "ambassador", name = "Ambassador", version = "1.4.5-cache", authors = {"adde0109", "Chaldea CRP"})
 public class Ambassador {
 
   //Don't forget to update checkCompatibleVersion() when changing this value
@@ -54,6 +55,7 @@ public class Ambassador {
   private final Path dataDirectory;
 
   public AmbassadorConfig config;
+  public RegistryPacketCache packetCache;
 
   private static final MapWithExpiration<String, RegisteredServer> TEMPORARY_FORCED = new MapWithExpiration<>();
 
@@ -97,6 +99,8 @@ public class Ambassador {
       Path configPath = dataDirectory.resolve("Ambassador.toml");
       config = AmbassadorConfig.read(configPath);
       config.validate();
+
+      packetCache = new RegistryPacketCache(logger);
 
       inject();
 

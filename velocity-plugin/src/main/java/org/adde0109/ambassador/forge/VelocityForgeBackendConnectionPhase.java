@@ -11,6 +11,7 @@ import com.velocitypowered.proxy.protocol.packet.AvailableCommands;
 import com.velocitypowered.proxy.protocol.packet.LoginPluginMessage;
 import com.velocitypowered.proxy.protocol.packet.PluginMessage;
 import io.netty.buffer.ByteBuf;
+import org.adde0109.ambassador.Ambassador;
 import org.adde0109.ambassador.forge.pipeline.CommandDecoderErrorCatcher;
 import org.adde0109.ambassador.forge.pipeline.ForgeLoginWrapperDecoder;
 
@@ -31,6 +32,14 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
     @Override
     public void onLoginSuccess(VelocityServerConnection serverCon, ConnectedPlayer player) {
       serverCon.setConnectionPhase(VelocityForgeBackendConnectionPhase.COMPLETE);
+
+      // Phase 3 step 3a: finalize captured handshake packets, log fingerprint
+      try {
+        String serverName = serverCon.getServerInfo().getName();
+        Ambassador.getInstance().packetCache.finalizeAndLog(serverName);
+      } catch (Exception e) {
+        Ambassador.getInstance().logger.warn("[ambassador-cache] finalize failed: {}", e.getMessage());
+      }
 
       serverCon.getConnection().getChannel().pipeline().addBefore(Connections.MINECRAFT_DECODER,
               ForgeConstants.COMMAND_ERROR_CATCHER,
@@ -75,6 +84,14 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
         return;
       }
     }
+    // Phase 3 step 3a: capture this packet's payload before we relay it
+    try {
+      String serverName = server.getServerInfo().getName();
+      Ambassador.getInstance().packetCache.capturePacket(serverName, message.content());
+    } catch (Exception e) {
+      Ambassador.getInstance().logger.warn("[ambassador-cache] capture failed: {}", e.getMessage());
+    }
+
     message.retain();
     player.getConnection().write(message);
     //Forge server
