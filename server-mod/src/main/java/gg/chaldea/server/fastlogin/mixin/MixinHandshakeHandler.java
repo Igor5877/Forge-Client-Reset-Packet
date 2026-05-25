@@ -5,68 +5,74 @@ import gg.chaldea.server.fastlogin.ConnectionSkipTracker;
 import gg.chaldea.server.fastlogin.FastLoginMod;
 import gg.chaldea.server.fastlogin.RegistryHashUtil;
 import gg.chaldea.server.fastlogin.network.S2CHashChallenge;
+import io.netty.channel.Channel;
 import net.minecraft.network.Connection;
 import net.minecraftforge.network.HandshakeHandler;
-import net.minecraftforge.network.HandshakeMessages;
-import net.minecraftforge.network.NetworkEvent;
+import net.minecraftforge.network.NetworkDirection;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.function.Supplier;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 /**
- * Hooks into the server-side FML handshake handler.
+ * Inject before NetworkRegistry.gatherLoginPayloads(...) is called inside the
+ * HandshakeHandler constructor. We use @ModifyArg as a side-effecting hook —
+ * it returns the same direction unchanged but does our setup before the call.
  *
- * Injection point: HEAD of handleClientModListOnServer.  Sends S2CHashChallenge
- * to the client and flags the connection as "pending hash response" so the
- * companion MixinGameData (on NetworkRegistry.gatherLoginPayloads) knows to
- * spin-wait for the response before deciding whether to skip the registry sync.
+ * Why @ModifyArg: Mixin disallows @Inject targeting constructors; @Redirect
+ * would also work but requires calling the original (which is package-private
+ * and not directly callable from outside the Forge package).
  *
- * The C2SHashResponse arrival handler lives in FastLoginMod as an inline
- * consumerNetworkThread lambda (running on the Netty IO thread).
+ * After this fires, the existing MixinGameData hook on gatherLoginPayloads
+ * sees a pending connection (via CURRENT_CHANNEL) and spin-waits for the
+ * client's response.
  */
 @Mixin(value = HandshakeHandler.class, remap = false)
-public class MixinHandshakeHandler {
+public abstract class MixinHandshakeHandler {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
-    @Inject(
-        method = "handleClientModListOnServer(Lnet/minecraftforge/network/HandshakeMessages$C2SModListReply;Ljava/util/function/Supplier;)V",
-        at     = @At("HEAD"),
-        remap  = false,
-        cancellable = false
+    @Shadow @Final private Connection manager;
+
+    @ModifyArg(
+        method = "<init>(Lnet/minecraft/network/Connection;Lnet/minecraftforge/network/NetworkDirection;)V",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraftforge/network/NetworkRegistry;gatherLoginPayloads(Lnet/minecraftforge/network/NetworkDirection;Z)Ljava/util/List;",
+            remap = false
+        ),
+        index = 0,
+        remap = false
     )
-    private void fl$afterModList(
-        HandshakeMessages.C2SModListReply reply,
-        Supplier<NetworkEvent.Context> ctxSupplier,
-        CallbackInfo ci
-    ) {
-        if (RegistryHashUtil.getHash() == null) return;
+    private NetworkDirection fl$beforeGather(NetworkDirection direction) {
+        // Only act on the server-side LOGIN_TO_CLIENT direction over a real
+        // (non-memory) network connection, with the registry hash computed.
+        if (direction == NetworkDirection.LOGIN_TO_CLIENT
+            && RegistryHashUtil.getHash() != null
+            && this.manager != null
+            && !this.manager.isMemoryConnection())
+        {
+            Channel ch = this.manager.channel();
+            if (ch != null) {
+                ChannelContext.CURRENT_CHANNEL.set(ch);
+                ConnectionSkipTracker.markPending(ch);
+                ConnectionSkipTracker.markChallengeSent(ch, System.nanoTime());
 
-        NetworkEvent.Context ctx = ctxSupplier.get();
-        Connection connection    = ctx.getNetworkManager();
-        io.netty.channel.Channel ch = connection.channel();
-
-        // Set CURRENT_CHANNEL first so MixinGameData can identify this connection
-        // when NetworkRegistry.gatherLoginPayloads() runs later on the same thread.
-        ChannelContext.CURRENT_CHANNEL.set(ch);
-
-        // Mark this connection as waiting so MixinGameData spin-waits for our response
-        ConnectionSkipTracker.markPending(ch);
-
-        // Send hash challenge to client
-        S2CHashChallenge challenge = new S2CHashChallenge(RegistryHashUtil.getHash());
-        try {
-            FastLoginMod.sendHashChallenge(challenge, connection);
-            LOGGER.debug("[FastLogin] Sent hash challenge to {}", connection.getRemoteAddress());
-        } catch (Exception e) {
-            LOGGER.warn("[FastLogin] Failed to send hash challenge, will do full sync: {}", e.getMessage());
-            ConnectionSkipTracker.markNoSkip(ch);
-            ChannelContext.CURRENT_CHANNEL.remove();
+                S2CHashChallenge challenge = new S2CHashChallenge(RegistryHashUtil.getHash());
+                try {
+                    FastLoginMod.sendHashChallenge(challenge, this.manager);
+                    LOGGER.info("[FastLogin][T0] challenge_sent (ctor) addr={} hash={}",
+                        this.manager.getRemoteAddress(), RegistryHashUtil.getHash());
+                } catch (Exception e) {
+                    LOGGER.warn("[FastLogin] Failed to send hash challenge from ctor: {}", e.getMessage());
+                    ConnectionSkipTracker.markNoSkip(ch);
+                    ChannelContext.CURRENT_CHANNEL.remove();
+                }
+            }
         }
+        return direction;
     }
 }

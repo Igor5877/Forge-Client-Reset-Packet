@@ -2,7 +2,22 @@
   "permissions": {
     "allow": [
       "Bash(unzip -p /home/igor/.gradle/caches/forge_gradle/mcp_repo/net/minecraft/joined/1.20.1-20230612.114412/joined-1.20.1-20230612.114412-srg.jar net/minecraft/client/gui/screens/Screen.class)",
-      "Bash(javap -p)"
+      "Bash(javap -p)",
+      "Bash(./gradlew build *)",
+      "Bash(./gradlew compileJava --no-daemon)",
+      "Read(//home/igor/.steam/debian-installation/steamapps/compatdata/3934852562/pfx/drive_c/users/steamuser/AppData/Roaming/.loliland/game-resources/clients/techno_magic_sky/main/libraries/loliland/**)",
+      "Read(//home/igor/.steam/debian-installation/steamapps/compatdata/3934852562/pfx/drive_c/users/steamuser/AppData/Roaming/.loliland/game-resources/clients/techno_magic_sky/main/**)",
+      "Bash(unzip -l LoliMod-1.7.10-client.jar)",
+      "Bash(awk '{print $NF}')",
+      "Bash(xargs strings)",
+      "Bash(unzip -l coremods/loligraphics-master-3ac9e3b2.jar)",
+      "Bash(unzip -l client.jar)",
+      "Bash(unzip -p LoliMod-1.7.10-client.jar META-INF/MANIFEST.MF)",
+      "Bash(unzip -p LoliHooks-master-aa342203.jar META-INF/MANIFEST.MF)",
+      "Bash(unzip -l LoliHooks-master-aa342203.jar)",
+      "Bash(grep -iE \"\\\\.class$\")",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

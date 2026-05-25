@@ -91,7 +91,7 @@ public class ClientReset {
 				handshakeChannel.messageBuilder(S2CHashChallenge.class, 96)
 						.loginIndex(S2CHashChallenge::getLoginIndex, S2CHashChallenge::setLoginIndex)
 						.decoder(S2CHashChallenge::decode)
-						.encoder(S2CHashChallenge::encode)
+						.encoder((msg, buf) -> S2CHashChallenge.encode(msg, buf))
 						.consumerNetworkThread(HandshakeHandler.biConsumerFor(ClientReset::handleHashChallenge))
 						.add();
 				// C2SHashResponse only needs an encoder on the client side (server decodes it).
@@ -102,7 +102,7 @@ public class ClientReset {
 				handshakeChannel.messageBuilder(C2SHashResponse.class, 97)
 						.loginIndex(C2SHashResponse::getLoginIndex, C2SHashResponse::setLoginIndex)
 						.decoder(C2SHashResponse::decode)
-						.encoder(C2SHashResponse::encode)
+						.encoder((msg, buf) -> C2SHashResponse.encode(msg, buf))
 						.consumerNetworkThread(hashResponseStub)
 						.add();
 				logger.info(RESETMARKER, "Registered hash-challenge packets (IDs 96/97).");
@@ -121,46 +121,61 @@ public class ClientReset {
 	 *   - Cache miss → reply hasCache=false (server does full sync, we save after LoginSuccess)
 	 */
 	@OnlyIn(Dist.CLIENT)
-	public static void handleHashChallenge(HandshakeHandler handler, S2CHashChallenge msg,
-			Supplier<NetworkEvent.Context> ctxSupplier) {
-		NetworkEvent.Context ctx = ctxSupplier.get();
-		Connection connection    = ctx.getNetworkManager();
-		String hash              = msg.getRegistryHash();
+    public static void handleHashChallenge(HandshakeHandler handler, S2CHashChallenge msg,
+            Supplier<NetworkEvent.Context> ctxSupplier) {
 
-		logger.info(RESETMARKER, "Received hash challenge from server: {}", hash);
-		lastReceivedServerHash = hash;
+        final long t0 = System.nanoTime();
+        NetworkEvent.Context ctx = ctxSupplier.get();
+        Connection connection = ctx.getNetworkManager();
+        String hash = msg.getRegistryHash();
 
-		boolean hasCache = RegistryCache.hasCachedRegistry(hash);
+        logger.info(RESETMARKER, "[T0] challenge_received hash={}", hash);
+        lastReceivedServerHash = hash;
 
-		if (hasCache) {
-			logger.info(RESETMARKER, "Registry cache HIT for hash {} – scheduling restore", hash);
-			// Restore on the main thread so GameData is in the right state before handshake continues
-			ctx.enqueueWork(() -> {
-				boolean ok = RegistryCache.restoreFromCache(hash);
-				if (!ok) {
-					logger.warn(RESETMARKER, "Cache restore failed – server will do full sync on next connection");
-					RegistryCache.clearAll();
-					lastReceivedServerHash = null;
-				}
-			});
-		} else {
-			logger.info(RESETMARKER, "Registry cache MISS for hash {} – full sync will proceed", hash);
-		}
+        CompletableFuture.runAsync(() -> {
+            long t1 = System.nanoTime();
+            boolean hasCache = RegistryCache.hasCachedRegistry(hash);
+            long checkMs = (System.nanoTime() - t1) / 1_000_000L;
+            logger.info(RESETMARKER, "[T1] cache_check hash={} hasCache={} check_ms={}",
+                hash, hasCache, checkMs);
 
-		ctx.setPacketHandled(true);
+            if (hasCache) {
+                ctx.enqueueWork(() -> {
+                    long t2 = System.nanoTime();
+                    boolean ok = RegistryCache.restoreFromCache(hash);
+                    long restoreMs = (System.nanoTime() - t2) / 1_000_000L;
+                    logger.info(RESETMARKER, "[T2] cache_restore ok={} restore_ms={}", ok, restoreMs);
+                    if (!ok) {
+                        RegistryCache.clearAll();
+                        lastReceivedServerHash = null;
+                    }
+                });
+            }
 
-		try {
-			C2SHashResponse response = new C2SHashResponse(hasCache);
-			// Direction must match the original S2C packet direction (LOGIN_TO_CLIENT),
-			// same convention as C2SAcknowledge replies in handleReset().
-			handshakeChannel.reply(
-				response,
-				(NetworkEvent.Context) contextConstructor.newInstance(
-					connection, NetworkDirection.LOGIN_TO_CLIENT, 97)
-			);
-		} catch (Exception e) {
-			logger.error(RESETMARKER, "Failed to send C2SHashResponse: {}", e.getMessage());
-		}
+            try {
+                C2SHashResponse response = new C2SHashResponse(hasCache);
+                handshakeChannel.reply(
+                    response,
+                    (NetworkEvent.Context) contextConstructor.newInstance(
+                        connection, NetworkDirection.LOGIN_TO_CLIENT, 97)
+                );
+                long sentMs = (System.nanoTime() - t0) / 1_000_000L;
+                logger.info(RESETMARKER, "[T3] response_sent hasCache={} total_ms_since_t0={}",
+                    hasCache, sentMs);
+            } catch (Exception e) {
+                logger.error(RESETMARKER, "Помилка при відправці C2SHashResponse: {}", e.getMessage());
+            }
+        });
+
+        ctx.setPacketHandled(true);
+    }
+
+	public static void sendMessage(String text) {
+    	Minecraft mc = Minecraft.getInstance();
+    	if (mc.player != null) {
+        	mc.player.displayClientMessage(Component.literal("§6[ResetTimer] §f" + text), false);
+    	}
+    	logger.info(RESETMARKER, text);
 	}
 
 	public static void handleReset(HandshakeHandler handler, S2CReset msg, Supplier<NetworkEvent.Context> contextSupplier) {
@@ -201,53 +216,44 @@ public class ClientReset {
 	}
 
 	@OnlyIn(Dist.CLIENT)
-	public static boolean handleClear(NetworkEvent.Context context) {
-		CompletableFuture<Void> future = context.enqueueWork(() -> {
-			logger.debug(RESETMARKER, "Clearing");
+public static boolean handleClear(NetworkEvent.Context context) {
+    long startTime = System.currentTimeMillis();
+    sendMessage("Початок очищення...");
 
-			Minecraft mc = Minecraft.getInstance();
+    CompletableFuture<Void> future = context.enqueueWork(() -> {
+        long captureStart = System.currentTimeMillis();
 
-			// In 1.20.1 the current server data is derived from the active
-			// ClientPacketListener (Minecraft.getCurrentServer() reads it from
-			// the listener), so there's no Minecraft#setCurrentServer to call.
-			// The new connection we set up below installs its own listener,
-			// so the server context is preserved naturally.  Similarly, the
-			// server-supplied resource pack is owned by DownloadedPackSource
-			// and survives clearLevel() — no manual preserve/restore needed.
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) GameData.revertToFrozen();
 
-			if (mc.level == null) {
-				// Ensure the GameData is reverted in case the client is reset during the handshake.
-				GameData.revertToFrozen();
-			}
+        FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
+        SeamlessTransition.begin();
+        SeamlessTransition.softClear = true;
+        try {
+            mc.clearLevel(transitionScreen);
+        } finally {
+            SeamlessTransition.softClear = false;
+        }
 
-			// Capture the current frame before clearing so we can show it during transition
-			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
-			SeamlessTransition.begin();
+        sendMessage("Очищення рівня: " + (System.currentTimeMillis() - captureStart) + " мс");
 
-			// Use our frozen frame screen instead of the dirt "Negotiating..." screen
-			mc.clearLevel(transitionScreen);
+        try {
+            long pipelineStart = System.currentTimeMillis();
+            context.getNetworkManager().channel().pipeline().remove("forge:forge_fixes");
+            context.getNetworkManager().channel().pipeline().remove("forge:vanilla_filter");
+            sendMessage("Pipeline cleanup: " + (System.currentTimeMillis() - pipelineStart) + " мс");
+        } catch (NoSuchElementException ignored) {}
+    });
 
-			try {
-				context.getNetworkManager().channel().pipeline().remove("forge:forge_fixes");
-			} catch (NoSuchElementException ignored) {
-			}
-			try {
-				context.getNetworkManager().channel().pipeline().remove("forge:vanilla_filter");
-			} catch (NoSuchElementException ignored) {
-			}
-		});
-
-		logger.debug(RESETMARKER, "Waiting for clear to complete");
-		try {
-			future.get();
-			logger.debug("Clear complete, continuing reset");
-			return true;
-		} catch (Exception ex) {
-			logger.error(RESETMARKER, "Failed to clear, closing connection", ex);
-			context.getNetworkManager().disconnect(Component.literal("Failed to clear, closing connection"));
-			return false;
-		}
-	}
+    try {
+        future.get();
+        sendMessage("Загальний час переходу до логіну: " + (System.currentTimeMillis() - startTime) + " мс");
+        return true;
+    } catch (Exception ex) {
+        sendMessage("Помилка при очищенні!");
+        return false;
+    }
+}
 
 	private static Field fetchHandshakeChannel() {
 		try {

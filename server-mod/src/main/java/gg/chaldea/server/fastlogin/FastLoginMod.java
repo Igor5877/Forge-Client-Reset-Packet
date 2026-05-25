@@ -71,13 +71,15 @@ public class FastLoginMod {
                 (msg, ctxSupplier) -> {
                     NetworkEvent.Context ctx = ctxSupplier.get();
                     Connection conn = ctx.getNetworkManager();
+                    Long sentAt = ConnectionSkipTracker.getChallengeSentAt(conn.channel());
+                    long rttMs = sentAt == null ? -1L : (System.nanoTime() - sentAt) / 1_000_000L;
                     if (msg.hasCache()) {
-                        LOGGER.info("[FastLogin] Client has cached registry – skipping S2CRegistry for {}",
-                            conn.getRemoteAddress());
+                        LOGGER.info("[FastLogin][T1] response_received addr={} hasCache=true rtt_ms={}",
+                            conn.getRemoteAddress(), rttMs);
                         ConnectionSkipTracker.markSkip(conn.channel());
                     } else {
-                        LOGGER.debug("[FastLogin] Client needs full registry sync for {}",
-                            conn.getRemoteAddress());
+                        LOGGER.info("[FastLogin][T1] response_received addr={} hasCache=false rtt_ms={}",
+                            conn.getRemoteAddress(), rttMs);
                         ConnectionSkipTracker.markNoSkip(conn.channel());
                     }
                     ctx.setPacketHandled(true);

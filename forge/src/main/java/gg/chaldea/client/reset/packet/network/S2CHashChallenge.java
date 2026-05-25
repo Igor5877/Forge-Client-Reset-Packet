@@ -33,6 +33,6 @@ public class S2CHashChallenge extends HandshakeMessages.C2SAcknowledge {
 
     private int loginIndex;
 
-    @Override public int getLoginIndex()        { return loginIndex; }
-    @Override public void setLoginIndex(int idx) { this.loginIndex = idx; }
+    public int getLoginIndex()        { return loginIndex; }
+    public void setLoginIndex(int idx) { this.loginIndex = idx; }
 }

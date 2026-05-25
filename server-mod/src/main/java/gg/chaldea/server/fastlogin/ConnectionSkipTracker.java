@@ -3,6 +3,7 @@ package gg.chaldea.server.fastlogin;
 import io.netty.channel.Channel;
 
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -25,6 +26,17 @@ public class ConnectionSkipTracker {
 
     // Channels that have been challenged but not yet responded
     private static final Set<Channel> pendingSet = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    // nanoTime when challenge was sent (for timing logs)
+    private static final Map<Channel, Long> challengeSentAt = new ConcurrentHashMap<>();
+
+    public static void markChallengeSent(Channel ch, long nanoTime) {
+        challengeSentAt.put(ch, nanoTime);
+    }
+
+    public static Long getChallengeSentAt(Channel ch) {
+        return challengeSentAt.get(ch);
+    }
 
     public static void markPending(Channel ch) {
         pendingSet.add(ch);
@@ -51,5 +63,6 @@ public class ConnectionSkipTracker {
     public static void clear(Channel ch) {
         pendingSet.remove(ch);
         skipSet.remove(ch);
+        challengeSentAt.remove(ch);
     }
 }

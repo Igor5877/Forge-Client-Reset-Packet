@@ -76,9 +76,14 @@ public class MixinGameData {
 
         ChannelContext.CURRENT_CHANNEL.remove(); // Always clean up ThreadLocal
 
+        Long sentAt = ConnectionSkipTracker.getChallengeSentAt(ch);
+        long totalMs = sentAt == null ? -1L : (System.nanoTime() - sentAt) / 1_000_000L;
+
         if (ConnectionSkipTracker.shouldSkip(ch)) {
-            LOGGER.info("[FastLogin] Skipping registry sync for channel {}", ch);
+            LOGGER.info("[FastLogin][T2] gather_decision channel={} skip=true total_ms={}", ch, totalMs);
             cir.setReturnValue(Collections.emptyList());
+        } else {
+            LOGGER.info("[FastLogin][T2] gather_decision channel={} skip=false total_ms={}", ch, totalMs);
         }
     }
 }

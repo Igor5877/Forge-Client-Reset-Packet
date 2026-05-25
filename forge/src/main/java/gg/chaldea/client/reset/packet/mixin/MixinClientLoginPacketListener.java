@@ -31,16 +31,15 @@ public class MixinClientLoginPacketListener {
         at     = @At("TAIL")
     )
     private void crp$onLoginSuccess(ClientboundGameProfilePacket packet, CallbackInfo ci) {
+        LOGGER.info("[FastLogin][T4] login_success");
+        gg.chaldea.client.reset.packet.SeamlessTransition.tLoginSuccess = System.nanoTime();
+
         String hash = ClientReset.lastReceivedServerHash;
         if (hash == null) return;
 
-        // Save on a background thread so we do not stall the network event loop.
-        // GameData is stable after LoginSuccess – reading registry keys is thread-safe here.
         String hashCopy = hash;
         Thread saver = new Thread(() -> RegistryCache.saveRegistry(hashCopy), "CRP-RegistryCacheSaver");
         saver.setDaemon(true);
         saver.start();
-
-        LOGGER.info("[RegistryCache] Scheduled registry save for hash {}", hash);
     }
 }
