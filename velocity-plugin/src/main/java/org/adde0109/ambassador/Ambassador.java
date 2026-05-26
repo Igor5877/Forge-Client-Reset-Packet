@@ -31,6 +31,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.adde0109.ambassador.canonical.CanonicalRegistrySync;
 import org.adde0109.ambassador.velocity.VelocityBackendChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityServerChannelInitializer;
 import org.adde0109.ambassador.velocity.VelocityEventHandler;
@@ -58,6 +59,7 @@ public class Ambassador {
   private final Path dataDirectory;
 
   public AmbassadorConfig config;
+  public CanonicalRegistrySync canonicalSync;
 
   private static final MapWithExpiration<String, RegisteredServer> TEMPORARY_FORCED = new MapWithExpiration<>();
 
@@ -102,6 +104,22 @@ public class Ambassador {
       config = AmbassadorConfig.read(configPath);
 
       inject();
+
+      // Start canonical registry sync HTTP server (configurable via env var,
+      // default port 25700). Backends POST their registry IDs to learn the
+      // canonical mapping.
+      int canonicalPort = 25700;
+      String portOverride = System.getenv("AMBASSADOR_CANONICAL_PORT");
+      if (portOverride != null && !portOverride.isEmpty()) {
+        try { canonicalPort = Integer.parseInt(portOverride); }
+        catch (NumberFormatException ignored) {}
+      }
+      try {
+        canonicalSync = new CanonicalRegistrySync(logger, canonicalPort);
+        canonicalSync.start();
+      } catch (Exception e) {
+        logger.warn("Failed to start CanonicalRegistrySync on port {}: {}", canonicalPort, e.getMessage());
+      }
 
       server.getEventManager().register(this, new VelocityEventHandler(this));
     } catch (Exception e) {

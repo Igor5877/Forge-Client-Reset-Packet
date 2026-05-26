@@ -11,10 +11,17 @@ import net.minecraftforge.registries.RegistryManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Map;
 
 /**
@@ -66,29 +73,100 @@ public final class CanonicalIdManager {
     }
 
     /**
-     * On ServerStartedEvent — write our current ID mapping if no canonical
-     * file exists yet. The first backend to start defines the canonical set.
+     * On ServerStartedEvent — register our current ID mapping with the
+     * Ambassador proxy's HTTP endpoint. The proxy keeps the first-registered
+     * snapshot as canonical and returns it to every subsequent caller. If
+     * what we got back differs from what we sent, we save it to a local file;
+     * the mixin will apply it to level.dat on the NEXT server restart.
+     *
+     * If FASTLOGIN_PROXY_URL is unset, falls back to writing local canonical
+     * only (compatible with file-based deploys).
      */
     public static void saveCanonicalIfAbsent(MinecraftServer server) {
-        Path canonicalFile = resolveCanonicalPath(server);
-        if (Files.exists(canonicalFile)) {
-            LOGGER.info("[CanonicalID] Existing canonical at {} — leaving alone", canonicalFile);
-            return;
-        }
+        // 1. Build our current ID snapshot as NBT-compressed bytes
+        byte[] ourBytes;
+        int snapCount;
         try {
             CompoundTag registries = new CompoundTag();
             Map<ResourceLocation, ForgeRegistry.Snapshot> snap =
                     RegistryManager.ACTIVE.takeSnapshot(true);
+            snapCount = snap.size();
             for (Map.Entry<ResourceLocation, ForgeRegistry.Snapshot> e : snap.entrySet()) {
                 registries.put(e.getKey().toString(), e.getValue().write());
             }
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            NbtIo.writeCompressed(registries, new DataOutputStream(baos));
+            ourBytes = baos.toByteArray();
+        } catch (IOException e) {
+            LOGGER.error("[CanonicalID] Failed to serialize own snapshot: {}", e.getMessage());
+            return;
+        }
+
+        Path canonicalFile = resolveCanonicalPath(server);
+        String proxyUrl = System.getenv("FASTLOGIN_PROXY_URL");
+
+        if (proxyUrl != null && !proxyUrl.isEmpty()) {
+            byte[] received = postToProxy(proxyUrl, server.getMotd(), ourBytes);
+            if (received != null) {
+                if (Arrays.equals(received, ourBytes)) {
+                    LOGGER.info("[CanonicalID] Proxy confirms WE ARE canonical master ({} registries, {} bytes)",
+                            snapCount, ourBytes.length);
+                } else {
+                    LOGGER.info("[CanonicalID] Proxy returned different canonical ({} bytes vs our {} bytes) — saving for next restart",
+                            received.length, ourBytes.length);
+                    writeLocalCanonical(canonicalFile, received);
+                }
+                return;
+            }
+            LOGGER.warn("[CanonicalID] Proxy at {} unreachable — falling back to local-file canonical", proxyUrl);
+        }
+
+        // Fallback: local-file canonical (legacy/standalone mode)
+        if (Files.exists(canonicalFile)) {
+            LOGGER.info("[CanonicalID] Existing local canonical at {} — leaving alone", canonicalFile);
+            return;
+        }
+        writeLocalCanonical(canonicalFile, ourBytes);
+        LOGGER.info("[CanonicalID] WROTE local canonical: {} registries → {}", snapCount, canonicalFile);
+    }
+
+    private static void writeLocalCanonical(Path canonicalFile, byte[] bytes) {
+        try {
             Path parent = canonicalFile.getParent();
             if (parent != null) Files.createDirectories(parent);
-            NbtIo.writeCompressed(registries, canonicalFile.toFile());
-            LOGGER.info("[CanonicalID] WROTE canonical: {} registries → {}",
-                    snap.size(), canonicalFile);
+            Files.write(canonicalFile, bytes);
         } catch (IOException e) {
-            LOGGER.error("[CanonicalID] Failed to write canonical: {}", e.getMessage());
+            LOGGER.error("[CanonicalID] Failed to write local canonical at {}: {}", canonicalFile, e.getMessage());
+        }
+    }
+
+    private static byte[] postToProxy(String proxyUrl, String serverName, byte[] body) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(proxyUrl + (proxyUrl.endsWith("/") ? "" : "/") + "canonical/register");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(5000);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/octet-stream");
+            conn.setRequestProperty("X-Server-Name", serverName == null ? "unknown" : serverName);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+            }
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                LOGGER.warn("[CanonicalID] Proxy responded HTTP {}", code);
+                return null;
+            }
+            try (InputStream is = conn.getInputStream()) {
+                return is.readAllBytes();
+            }
+        } catch (IOException e) {
+            LOGGER.warn("[CanonicalID] Proxy POST failed: {}", e.getMessage());
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
@@ -99,44 +177,88 @@ public final class CanonicalIdManager {
      * server but not in canonical).
      */
     public static void patchRootTag(CompoundTag rootTag, LevelStorageSource.LevelDirectory levelDirectory) {
-        // Find canonical file. We don't have a MinecraftServer here, so use
-        // the world directory to derive the same path saveCanonicalIfAbsent
-        // would use.
-        Path worldRoot = levelDirectory.path();
-        String fromEnv = System.getenv("FASTLOGIN_CANONICAL_IDS_FILE");
-        Path canonicalFile = (fromEnv != null && !fromEnv.isEmpty())
-                ? Paths.get(fromEnv)
-                : worldRoot.getParent().resolve("canonical-registry-ids.nbt");
+        // 1. Try fetching from the proxy first — this enables single-restart
+        //    sync when the proxy is reachable.
+        CompoundTag canonical = tryFetchFromProxy();
+        Path canonicalFile = null;
 
-        if (!Files.exists(canonicalFile)) {
-            LOGGER.info("[CanonicalID] No canonical at {} — this server will become canonical after first start",
-                    canonicalFile);
-            return;
+        // 2. Fall back to local canonical file.
+        if (canonical == null) {
+            Path worldRoot = levelDirectory.path();
+            String fromEnv = System.getenv("FASTLOGIN_CANONICAL_IDS_FILE");
+            canonicalFile = (fromEnv != null && !fromEnv.isEmpty())
+                    ? Paths.get(fromEnv)
+                    : worldRoot.getParent().resolve("canonical-registry-ids.nbt");
+
+            if (!Files.exists(canonicalFile)) {
+                LOGGER.info("[CanonicalID] No canonical from proxy or at {} — this server will become canonical after first start",
+                        canonicalFile);
+                return;
+            }
+            try {
+                canonical = NbtIo.readCompressed(canonicalFile.toFile());
+            } catch (IOException e) {
+                LOGGER.error("[CanonicalID] Failed to read local canonical {}: {}", canonicalFile, e.getMessage());
+                return;
+            }
         }
 
-        try {
-            CompoundTag canonical = NbtIo.readCompressed(canonicalFile.toFile());
-            // Forge writes to: rootTag.fml.Registries[<regName>] = Snapshot.write()
-            CompoundTag fml = rootTag.getCompound("fml");
-            CompoundTag existingRegistries = fml.getCompound("Registries");
+        // Forge writes to: rootTag.fml.Registries[<regName>] = Snapshot.write()
+        CompoundTag fml = rootTag.getCompound("fml");
+        CompoundTag existingRegistries = fml.getCompound("Registries");
 
-            int merged = 0;
-            int added = 0;
-            for (String regKey : canonical.getAllKeys()) {
-                if (existingRegistries.contains(regKey)) {
-                    merged++;
-                } else {
-                    added++;
-                }
-                existingRegistries.put(regKey, canonical.getCompound(regKey));
+        int merged = 0;
+        int added = 0;
+        for (String regKey : canonical.getAllKeys()) {
+            if (existingRegistries.contains(regKey)) {
+                merged++;
+            } else {
+                added++;
             }
-            fml.put("Registries", existingRegistries);
-            rootTag.put("fml", fml);
+            existingRegistries.put(regKey, canonical.getCompound(regKey));
+        }
+        fml.put("Registries", existingRegistries);
+        rootTag.put("fml", fml);
 
-            LOGGER.info("[CanonicalID] PATCHED level.dat in-memory: {} canonical registries (merged={}, added={}) from {}",
-                    canonical.getAllKeys().size(), merged, added, canonicalFile);
+        String src = canonicalFile != null ? canonicalFile.toString() : "proxy";
+        LOGGER.info("[CanonicalID] PATCHED level.dat in-memory: {} canonical registries (merged={}, added={}) from {}",
+                canonical.getAllKeys().size(), merged, added, src);
+    }
+
+    /** Try fetching canonical from the proxy's HTTP endpoint. Returns null on
+     *  any failure (proxy unreachable, no canonical registered yet, etc.). */
+    private static CompoundTag tryFetchFromProxy() {
+        String proxyUrl = System.getenv("FASTLOGIN_PROXY_URL");
+        if (proxyUrl == null || proxyUrl.isEmpty()) return null;
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(proxyUrl + (proxyUrl.endsWith("/") ? "" : "/") + "canonical/get");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(5000);
+            conn.setRequestMethod("GET");
+            int code = conn.getResponseCode();
+            if (code == 404) {
+                LOGGER.info("[CanonicalID] Proxy has no canonical yet (404)");
+                return null;
+            }
+            if (code != 200) {
+                LOGGER.warn("[CanonicalID] Proxy GET responded HTTP {}", code);
+                return null;
+            }
+            byte[] bytes;
+            try (InputStream is = conn.getInputStream()) {
+                bytes = is.readAllBytes();
+            }
+            CompoundTag tag = NbtIo.readCompressed(new java.io.ByteArrayInputStream(bytes));
+            LOGGER.info("[CanonicalID] Fetched canonical from proxy ({} bytes, {} registries)",
+                    bytes.length, tag.getAllKeys().size());
+            return tag;
         } catch (IOException e) {
-            LOGGER.error("[CanonicalID] Failed to read canonical {}: {}", canonicalFile, e.getMessage());
+            LOGGER.warn("[CanonicalID] Proxy GET failed: {}", e.getMessage());
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 }
