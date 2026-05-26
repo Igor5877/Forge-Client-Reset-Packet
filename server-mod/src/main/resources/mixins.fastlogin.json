@@ -9,7 +9,8 @@
     "MixinHandshakeHandler",
     "MixinHandshakeHandlerBatch",
     "LoginWrapperAccessor",
-    "MixinGameData"
+    "MixinGameData",
+    "MixinForgeHooksReadLevelData"
   ],
   "client": []
 }

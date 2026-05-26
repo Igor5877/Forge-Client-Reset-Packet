@@ -128,6 +128,9 @@ public class FastLoginMod {
         // Phase 3 diagnostic — dump server-side fingerprint so we can compare
         // backends (lobby vs island) and confirm whether ID-sync is even needed.
         dumpRegistryFingerprint();
+        // Canonical ID sync — first backend to start writes the reference file;
+        // subsequent backends' level.dat is patched on next load via MixinForgeHooksReadLevelData.
+        CanonicalIdManager.saveCanonicalIfAbsent(event.getServer());
     }
 
     private static volatile java.lang.reflect.Field SNAPSHOT_IDS_FIELD = null;
