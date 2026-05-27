@@ -1,6 +1,6 @@
 # Progress Log — Seamless Server Transition Optimization
 
-**Last updated:** 2026-05-27 (session, ~Kyiv)
+**Last updated:** 2026-05-27 (session 2, ~Kyiv)
 **Goal:** Reduce `/myisland` server-switch time from ~15s to ~2s (loliland 1.7.10 reference).
 **Branch:** `claude/seamless-server-transition-sq7di`
 
@@ -106,6 +106,13 @@ from `HandshakeHandler` ctor, before the client's handler is registered,
 so the client never sees it. Server mod still installs cleanly; flip the
 flag to true once the protocol is reworked.
 
+**Crash fix (session 2, commit `c67e355`):** `CanonicalIdManager.patchRootTag`
+called `levelDirectory.path()` which throws `NoSuchMethodError` at runtime.
+`LevelDirectory.path()` is a Java record component accessor — ForgeGradle
+does not remap it (SRG name `f_230850_()`). Fixed by using
+`levelDirectory.dataFile().getParent()` instead (`dataFile()` → `m_230858_()`
+is correctly remapped and returns `<worldRoot>/level.dat`; parent = worldRoot).
+
 ### velocity-plugin/ fork
 Forked from `adde0109/Ambassador` non-api branch (1.5.3-beta) into
 `velocity-plugin/` with Velocity submodule pinned to `c3583e18`. Build:
@@ -176,6 +183,12 @@ machine surgery.
 ## Commits on this branch (since `8f956c7`)
 
 ```
+c67e355 fix(server-mod): replace levelDirectory.path() with dataFile().getParent()
+80c71b2 feat: proxy-mediated canonical ID sync (no shared FS required)
+ad5cb63 feat(server-mod): canonical registry-ID sync across backends
+c720526 fix(server-mod): reflective Snapshot.ids access — server crash on dump
+43fd78f diag(server-mod): dump server-side registry fingerprint on ServerStarted
+def0c20 chore: re-add release jar (rebuild artifact)
 6751e37 fix(velocity-plugin): preserve CRP detection across PlayerChannelRegisterEvent
 8340bd5 diag(velocity-plugin): timing logs in handshake handler for Phase 3 analysis
 f6f131d feat: bridge clientresetpacket detection for Ambassador 1.5.x
