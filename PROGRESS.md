@@ -1,6 +1,6 @@
 # Progress Log — Seamless Server Transition Optimization
 
-**Last updated:** 2026-05-25 (end of session, ~23:30 Kyiv)
+**Last updated:** 2026-05-27 (session, ~Kyiv)
 **Goal:** Reduce `/myisland` server-switch time from ~15s to ~2s (loliland 1.7.10 reference).
 **Branch:** `claude/seamless-server-transition-sq7di`
 
@@ -22,13 +22,50 @@ flag, gated in `ClientReset.handleClear` and `ClientReset.handlePlayPhaseReset`.
 
 **Measured impact:** `clearLevel` 3500ms → **7-17ms**. ~3.5s saved per switch.
 
-### Phase 2 — Chunk buffer reuse (DISABLED, kept inert)
-`MixinLevelRenderer` skips `viewArea.releaseAllBuffers()` when
-`SeamlessTransition.keepChunkBuffers` is set. Was active in commits
-`f4b5b8a`...`83a54fa`, **disabled in `a340fbc`** because it caused stale
-GL meshes when switching between backends with different mod blocks
-(lobby's textures showed on island). Mixin stays in code for future use
-behind a "same-modset" detection.
+### Phase 2 — Chunk buffer reuse (RE-ENABLED with sameModset guard, commit `477b512`)
+`MixinLevelRenderer` intercepts `viewArea.releaseAllBuffers()` inside
+`allChanged()`. When `SeamlessTransition.keepChunkBuffers=true` it instead
+sets each `RenderChunk.compiled = CompiledChunk.UNCOMPILED` — clears stale
+meshes without freeing the underlying GL `VertexBuffer` objects.
+
+**Guard:** `keepChunkBuffers` is only set to true when `SeamlessTransition.sameModset=true`,
+which itself is only set when the Ambassador Velocity plugin sends a
+`fastlogin:same_modset` plugin message (see §Ambassador below). This prevents
+stale-texture artefacts when switching between backends with different mod blocks.
+
+- `SeamlessTransition.sameModset` — new flag
+- `ClientReset.KEEP_BUFFERS_ENABLED = true` — kill switch
+- `MixinClientPacketListenerReset` — handles `fastlogin:same_modset`
+
+**Expected impact:** -200 to -500ms on `allChanged()` (no GL buffer realloc),
+plus faster first-visible-frame because old buffer memory is reused in-place.
+
+### MixinChunkRenderDispatcher — more builder packs (NEW, commit `477b512`)
+Injects at RETURN of `ChunkRenderDispatcher.<init>` and adds extra
+`ChunkBufferBuilderPack` instances to `freeBuffers` if the vanilla heuristic
+gave fewer than `max(1, min(8, cores/2))`.
+
+In 1.20.1 the class is `net.minecraft.client.renderer.chunk.ChunkRenderDispatcher`
+(NOT `SectionRenderDispatcher` which only exists in 1.20.2+).
+`ChunkBufferBuilderPack` is in `net.minecraft.client.renderer` (not in `.chunk`).
+
+The number of packs limits concurrent mesh compilations — more packs = more
+parallel builds. Each pack is ~30MB; OOM is caught gracefully.
+
+**Expected impact:** Faster chunk rebuild after allChanged() on multi-core CPUs,
+especially when Phase 2 reuse is not available (first switch, different modsets).
+
+### Ambassador — sameModset fingerprint (NEW, commit `477b512`)
+`VelocityForgeBackendConnectionPhase`:
+- `BACKEND_REGISTRY_CACHE ConcurrentHashMap<serverName, Map<registryName, Adler32>>`:
+  stores each backend's registry fingerprint after a successful `isCompatible()` check.
+- Before CRP reset: compares cached fingerprints for old and new server.
+  If equal → writes `PluginMessagePacket("fastlogin:same_modset")` **before**
+  the reset packet (Netty write-order guarantee ensures client receives it first).
+- Logs decisions at INFO level: `[sameModset] player=X src→dst registry fingerprints match/absent`.
+
+**First switch:** no cache yet → no `sameModset` → safe fallback (Phase 2 off).
+**Subsequent switches (lobby↔island):** cache available → sameModset fires → Phase 2 on.
 
 ### CRP detection bridge (DONE)
 Two-pronged fix so Ambassador 1.5.x reliably detects our mod as CRP-capable:
