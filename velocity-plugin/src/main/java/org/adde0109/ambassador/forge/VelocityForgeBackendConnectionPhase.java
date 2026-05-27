@@ -13,7 +13,12 @@ import org.adde0109.ambassador.Ambassador;
 import org.adde0109.ambassador.forge.packet.*;
 import org.adde0109.ambassador.forge.pipeline.CommandDecoderErrorCatcher;
 
+import io.netty.buffer.Unpooled;
+
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
 public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhase {
@@ -67,12 +72,28 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
   public ForgeHandshake handshake = new ForgeHandshake();
   CountDownLatch remainingRegistries;
 
-  // Diagnostic counters (Phase 3 investigation) — instance fields stored on
-  // VelocityServerConnection via Velocity API would be cleaner, but enum
-  // constants are singletons so we use clientPhase.forgeHandshake's last-seen
-  // timing via a static map keyed by player UUID.
-  private static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, long[]> SWITCH_TIMING =
-      new java.util.concurrent.ConcurrentHashMap<>();
+  // Diagnostic counters (Phase 3 investigation)
+  private static final ConcurrentHashMap<java.util.UUID, long[]> SWITCH_TIMING =
+      new ConcurrentHashMap<>();
+
+  /**
+   * Per-backend registry fingerprint cache.
+   *
+   * Key:   server name (from RegisteredServer.getServerInfo().getName())
+   * Value: defensive copy of ForgeHandshake.getRegistries() — Map<registryName, Adler32>
+   *
+   * Populated after a successful isCompatible() check so we know the backend's
+   * registry fingerprint is consistent with a known-good client handshake.
+   *
+   * Used to detect "same modset" transitions: if the fingerprints of
+   * old backend and new backend are equal, we send fastlogin:same_modset to
+   * the client BEFORE the CRP reset packet, enabling Phase 2 chunk-buffer reuse.
+   *
+   * Concurrency: ConcurrentHashMap for thread-safe reads/writes; values are
+   * immutable HashMap snapshots taken at store time.
+   */
+  private static final ConcurrentHashMap<String, Map<String, Long>> BACKEND_REGISTRY_CACHE =
+      new ConcurrentHashMap<>();
 
   VelocityForgeBackendConnectionPhase() {
   }
@@ -129,8 +150,37 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
       player.getConnection().write(message);
     } else {
       //Reset client if not ready to receive new handshake
-      if (clientPhase.getResetType() == VelocityForgeClientConnectionPhase.ClientResetType.CRP ||
-              clientPhase.getResetType() == VelocityForgeClientConnectionPhase.ClientResetType.SR) {
+      if (clientPhase.getResetType() == VelocityForgeClientConnectionPhase.ClientResetType.CRP) {
+        // --- sameModset detection ---
+        // Before sending the CRP reset packet, check if the old and new backends
+        // have identical registry fingerprints (cached from previous handshakes).
+        // If yes, send fastlogin:same_modset to the client so it can reuse GPU
+        // chunk buffers (Phase 2) instead of releasing and reallocating all VBOs.
+        // This message must arrive BEFORE the reset packet (Netty write-order guarantee).
+        if (player.getConnectedServer() != null) {
+          String oldServer = player.getConnectedServer().getServerInfo().getName();
+          String newServer = server.getServerInfo().getName();
+          Map<String, Long> oldRegs = BACKEND_REGISTRY_CACHE.get(oldServer);
+          Map<String, Long> newRegs = BACKEND_REGISTRY_CACHE.get(newServer);
+          if (oldRegs != null && newRegs != null && oldRegs.equals(newRegs)) {
+            player.getConnection().write(new PluginMessagePacket(
+                "fastlogin:same_modset", Unpooled.wrappedBuffer(new byte[]{1})));
+            Ambassador.getInstance().logger.info(
+                "[sameModset] player={} {} → {} — registry fingerprints match, sent same_modset",
+                player.getUsername(), oldServer, newServer);
+          } else {
+            Ambassador.getInstance().logger.info(
+                "[sameModset] player={} {} → {} — no cache or mismatch (old={} new={}), skip",
+                player.getUsername(), oldServer, newServer,
+                oldRegs != null ? "cached" : "absent",
+                newRegs != null ? "cached" : "absent");
+          }
+        }
+        clientPhase.resetConnectionPhase(player);
+        player.getConnection().write(message);
+        return;
+      }
+      if (clientPhase.getResetType() == VelocityForgeClientConnectionPhase.ClientResetType.SR) {
         clientPhase.resetConnectionPhase(player);
         player.getConnection().write(message);
         return;
@@ -175,6 +225,16 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
 
           if (Ambassador.getInstance().config.isBypassRegistryCheck() ||
                   clientPhase.forgeHandshake.isCompatible(handshake)) {
+            // Cache this backend's registry fingerprint for future sameModset checks.
+            // The map is an immutable snapshot so future modifications to `handshake`
+            // (from the next player's handshake — enum singletons share the field)
+            // don't corrupt the cache.
+            BACKEND_REGISTRY_CACHE.put(
+                server.getServerInfo().getName(),
+                new HashMap<>(handshake.getRegistries()));
+            Ambassador.getInstance().logger.info(
+                "[sameModset] Cached registry fingerprint for server '{}' ({} registries)",
+                server.getServerInfo().getName(), handshake.getRegistries().size());
             server.ensureConnected().write(clientPhase.forgeHandshake.getModListReplyPacket());
           } else if (Ambassador.getInstance().config.isEnableKickReset()) {
             //Kick-reset

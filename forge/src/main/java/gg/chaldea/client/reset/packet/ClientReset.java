@@ -53,6 +53,15 @@ public class ClientReset {
 	public static SimpleChannel handshakeChannel;
 
 	/**
+	 * Kill switch for Phase 2 chunk-buffer reuse (keepChunkBuffers).
+	 * When false, keepChunkBuffers is never set and every transition does a
+	 * full viewArea.releaseAllBuffers() — safe but slower (~200-500ms extra).
+	 * When true, reuse is activated only when sameModset=true (same-backend
+	 * registry fingerprint confirmed by Ambassador Velocity plugin).
+	 */
+	public static final boolean KEEP_BUFFERS_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list
@@ -224,6 +233,11 @@ public class ClientReset {
 			if (mc.level == null) GameData.revertToFrozen();
 			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
 			SeamlessTransition.begin();
+			if (KEEP_BUFFERS_ENABLED && SeamlessTransition.sameModset) {
+				SeamlessTransition.keepChunkBuffers = true;
+				logger.info(RESETMARKER, "[Phase2/PLAY] keepChunkBuffers=true (sameModset confirmed)");
+			}
+			SeamlessTransition.sameModset = false; // consumed
 			SeamlessTransition.softClear = true;
 			try {
 				mc.clearLevel(transitionScreen);
@@ -309,9 +323,16 @@ public static boolean handleClear(NetworkEvent.Context context) {
 
         FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
         SeamlessTransition.begin();
-        // Phase 2 (keepChunkBuffers) disabled — caused stale GL meshes when
-        // switching to a backend with different blocks (modded blocks on
-        // island showed lobby's textures). Safe only for same-modset switches.
+        // Phase 2 chunk buffer reuse: activate only when sameModset=true
+        // (Ambassador confirmed matching registry fingerprints for old+new backend).
+        // When active, MixinLevelRenderer skips releaseAllBuffers() and calls
+        // RenderSection.reset() instead — keeps GPU allocations, clears compiled
+        // state. Safe for same-modset (same blocks); disabled otherwise.
+        if (KEEP_BUFFERS_ENABLED && SeamlessTransition.sameModset) {
+            SeamlessTransition.keepChunkBuffers = true;
+            logger.info(RESETMARKER, "[Phase2] keepChunkBuffers=true (sameModset confirmed)");
+        }
+        SeamlessTransition.sameModset = false; // consumed — reset for next cycle
         SeamlessTransition.softClear = true;
         try {
             mc.clearLevel(transitionScreen);

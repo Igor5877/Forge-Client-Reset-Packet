@@ -49,6 +49,20 @@ public class FastLoginMod {
      */
     public static final boolean BATCH_HANDSHAKE_ENABLED = true;
 
+    /**
+     * Flush ALL pending chunks to the player in a single server tick instead
+     * of Minecraft's default batch (typically 10 chunks per tick).
+     *
+     * Without this, a 21×21 render-distance (441 sections) takes ~44 ticks
+     * (~2.2s) to deliver.  With this, all chunks are sent in one shot as fast
+     * as the network allows.
+     *
+     * Applied to ALL connections (not just CRP resets) — sending chunks faster
+     * is always safe; the client can always handle more packets than the server's
+     * throttle normally allows.  Flip to false to revert to vanilla behaviour.
+     */
+    public static final boolean CHUNK_FLUSH_ENABLED = true;
+
     /** Packet IDs – must not clash with CRP (98) or Forge internals. */
     public static final int ID_S2C_CHALLENGE = 96;
     public static final int ID_C2S_RESPONSE  = 97;
