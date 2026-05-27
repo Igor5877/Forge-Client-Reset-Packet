@@ -184,7 +184,12 @@ public final class CanonicalIdManager {
 
         // 2. Fall back to local canonical file.
         if (canonical == null) {
-            Path worldRoot = levelDirectory.path();
+            // LevelDirectory.path() is a Java record component accessor.
+            // ForgeGradle does NOT remap it (it's stored as f_230850_ in SRG),
+            // so calling path() directly throws NoSuchMethodError at runtime.
+            // dataFile() (→ m_230858_()) returns <worldRoot>/level.dat — its
+            // parent is identical to path() and IS correctly remapped.
+            Path worldRoot = levelDirectory.dataFile().getParent();
             String fromEnv = System.getenv("FASTLOGIN_CANONICAL_IDS_FILE");
             canonicalFile = (fromEnv != null && !fromEnv.isEmpty())
                     ? Paths.get(fromEnv)
