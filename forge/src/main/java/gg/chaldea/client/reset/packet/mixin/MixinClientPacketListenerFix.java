@@ -31,6 +31,13 @@ public class MixinClientPacketListenerFix {
             LOGGER.info("[FastLogin][T5] first_chunk since_login_ms={} since_reset_ms={}",
                 sinceLogin, sinceReset);
         }
+        // Phase 3: reset skipRecipeEvents at first chunk — transition window is over.
+        // Any subsequent UpdateRecipesPacket (e.g. from world-specific datapacks later)
+        // must fire normally.
+        if (SeamlessTransition.skipRecipeEvents) {
+            SeamlessTransition.skipRecipeEvents = false;
+            LOGGER.info("[Phase3] skipRecipeEvents reset at first_chunk — REI can reload normally from now");
+        }
         checkAndCloseLoadingScreen();
     }
 

@@ -62,6 +62,26 @@ public class ClientReset {
 	public static final boolean KEEP_BUFFERS_ENABLED = true;
 
 	/**
+	 * Kill switch for Phase 3 REI skip (skipRecipeEvents).
+	 *
+	 * When false, RecipesUpdatedEvent and TagsUpdatedEvent always fire normally —
+	 * REI reloads all 71 plugins (~2.6s) on every switch. Safe but slow.
+	 *
+	 * When true, MixinClientPacketListenerRecipeSkip suppresses both events during
+	 * the CRP login sequence, but ONLY when sameModset=true (Ambassador confirmed
+	 * that old and new backends share identical Forge registry fingerprints, meaning
+	 * the same mod jars → same recipes and tags). If fingerprints differ the events
+	 * fire normally.
+	 *
+	 * The RecipeManager is still updated from the UpdateRecipesPacket data; tags are
+	 * still applied from UpdateTagsPacket. Only the broadcast events are suppressed.
+	 *
+	 * Expected saving: ~1.7s (RecipesUpdatedEvent/REI END) + ~0.9s (TagsUpdatedEvent/
+	 * REI START) = ~2.6s per switch, assuming the tag-event redirect matches.
+	 */
+	public static final boolean SKIP_RECIPE_EVENTS_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list
@@ -233,9 +253,15 @@ public class ClientReset {
 			if (mc.level == null) GameData.revertToFrozen();
 			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
 			SeamlessTransition.begin();
-			if (KEEP_BUFFERS_ENABLED && SeamlessTransition.sameModset) {
-				SeamlessTransition.keepChunkBuffers = true;
-				logger.info(RESETMARKER, "[Phase2/PLAY] keepChunkBuffers=true (sameModset confirmed)");
+			if (SeamlessTransition.sameModset) {
+				if (KEEP_BUFFERS_ENABLED) {
+					SeamlessTransition.keepChunkBuffers = true;
+					logger.info(RESETMARKER, "[Phase2/PLAY] keepChunkBuffers=true (sameModset)");
+				}
+				if (SKIP_RECIPE_EVENTS_ENABLED) {
+					SeamlessTransition.skipRecipeEvents = true;
+					logger.info(RESETMARKER, "[Phase3/PLAY] skipRecipeEvents=true — REI reload suppressed");
+				}
 			}
 			SeamlessTransition.sameModset = false; // consumed
 			SeamlessTransition.softClear = true;
@@ -323,14 +349,21 @@ public static boolean handleClear(NetworkEvent.Context context) {
 
         FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
         SeamlessTransition.begin();
-        // Phase 2 chunk buffer reuse: activate only when sameModset=true
-        // (Ambassador confirmed matching registry fingerprints for old+new backend).
-        // When active, MixinLevelRenderer skips releaseAllBuffers() and calls
-        // RenderSection.reset() instead — keeps GPU allocations, clears compiled
-        // state. Safe for same-modset (same blocks); disabled otherwise.
-        if (KEEP_BUFFERS_ENABLED && SeamlessTransition.sameModset) {
-            SeamlessTransition.keepChunkBuffers = true;
-            logger.info(RESETMARKER, "[Phase2] keepChunkBuffers=true (sameModset confirmed)");
+        // Phase 2 + Phase 3: activate only when sameModset=true
+        // (Ambassador confirmed matching registry fingerprints → same mod jars →
+        // same blocks/items/recipes/tags).
+        if (SeamlessTransition.sameModset) {
+            if (KEEP_BUFFERS_ENABLED) {
+                // Phase 2: reuse GPU chunk buffers — skip releaseAllBuffers()
+                SeamlessTransition.keepChunkBuffers = true;
+                logger.info(RESETMARKER, "[Phase2] keepChunkBuffers=true (sameModset)");
+            }
+            if (SKIP_RECIPE_EVENTS_ENABLED) {
+                // Phase 3: suppress RecipesUpdatedEvent + TagsUpdatedEvent so REI
+                // doesn't do a full ~2.6s plugin reload on identical recipe sets.
+                SeamlessTransition.skipRecipeEvents = true;
+                logger.info(RESETMARKER, "[Phase3] skipRecipeEvents=true — REI reload suppressed");
+            }
         }
         SeamlessTransition.sameModset = false; // consumed — reset for next cycle
         SeamlessTransition.softClear = true;

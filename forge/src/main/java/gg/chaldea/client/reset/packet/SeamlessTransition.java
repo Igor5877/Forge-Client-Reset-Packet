@@ -27,6 +27,22 @@ public class SeamlessTransition {
     // immediately after keepChunkBuffers is set from it.
     public static volatile boolean sameModset = false;
 
+    // When true, MixinClientPacketListenerRecipeSkip suppresses RecipesUpdatedEvent
+    // and TagsUpdatedEvent during the CRP login sequence so REI/thermal don't do a
+    // full plugin reload (~2.6s) on every switch.
+    //
+    // Safety: only set when sameModset=true, which means Ambassador confirmed that
+    // old and new backends share the same Forge registry fingerprints (same block/item
+    // IDs → same mod jars → same recipes and tags). If fingerprints differ,
+    // sameModset stays false → skipRecipeEvents stays false → REI reloads normally.
+    //
+    // The RecipeManager is still updated from the packet data — only the broadcast
+    // event is suppressed. Tags are still applied to registries — only TagsUpdatedEvent
+    // is suppressed.
+    //
+    // Reset to false by MixinClientPacketListenerFix.onChunkReceived (T5 marker).
+    public static volatile boolean skipRecipeEvents = false;
+
     // Timing markers — populated by mixins so we can compute deltas in logs.
     // Reset to 0L at the start of each reset cycle (ClientReset.handleClear)
     // so each transition gets fresh deltas instead of only the first one.
