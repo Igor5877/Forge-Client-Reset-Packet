@@ -194,18 +194,52 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
           String newServer = server.getServerInfo().getName();
           Map<String, Long> oldRegs = BACKEND_REGISTRY_CACHE.get(oldServer);
           Map<String, Long> newRegs = BACKEND_REGISTRY_CACHE.get(newServer);
+
+          boolean sameModset = false;
+          String reason;
+
           if (oldRegs != null && newRegs != null && oldRegs.equals(newRegs)) {
+            // Both servers in cache and fingerprints match — exact hit.
+            sameModset = true;
+            reason = "exact_match";
+          } else if (oldRegs != null && newRegs == null) {
+            // New server (e.g. freshly spawned island-{uuid}) not yet in cache.
+            // Fall back to any-match: if any cached server has the same fingerprint
+            // as oldServer, we can safely assume newServer shares the same modset
+            // (all island-* servers run the same jar set as lobby).
+            boolean anyMatch = BACKEND_REGISTRY_CACHE.values().stream()
+                .anyMatch(regs -> regs.equals(oldRegs));
+            if (anyMatch) {
+              sameModset = true;
+              reason = "any_match_fallback(new_server_uncached)";
+            } else {
+              reason = "no_match";
+            }
+          } else if (oldRegs == null && newRegs != null) {
+            // Old server not cached (first ever switch for this player?).
+            // Use any-match on newRegs side.
+            boolean anyMatch = BACKEND_REGISTRY_CACHE.values().stream()
+                .anyMatch(regs -> regs.equals(newRegs));
+            if (anyMatch) {
+              sameModset = true;
+              reason = "any_match_fallback(old_server_uncached)";
+            } else {
+              reason = "no_match";
+            }
+          } else {
+            reason = oldRegs == null ? "both_absent" : "mismatch";
+          }
+
+          if (sameModset) {
             player.getConnection().write(new PluginMessagePacket(
                 "fastlogin:same_modset", Unpooled.wrappedBuffer(new byte[]{1})));
             Ambassador.getInstance().logger.info(
-                "[sameModset] player={} {} → {} — registry fingerprints match, sent same_modset",
-                player.getUsername(), oldServer, newServer);
+                "[sameModset] player={} {} → {} — {} — sent same_modset",
+                player.getUsername(), oldServer, newServer, reason);
           } else {
             Ambassador.getInstance().logger.info(
-                "[sameModset] player={} {} → {} — no cache or mismatch (old={} new={}), skip",
-                player.getUsername(), oldServer, newServer,
-                oldRegs != null ? "cached" : "absent",
-                newRegs != null ? "cached" : "absent");
+                "[sameModset] player={} {} → {} — {} — skip",
+                player.getUsername(), oldServer, newServer, reason);
           }
         }
         clientPhase.resetConnectionPhase(player);
