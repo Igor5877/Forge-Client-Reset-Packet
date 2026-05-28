@@ -20,6 +20,7 @@
     "MixinClientPacketListenerReset",
     "MixinClientPacketListenerRecipeSkip",
     "MixinClientPacketListenerRecipeCache",
+    "MixinClientPacketListenerTagCache",
     "MixinHandshakeHandlerCache",
     "RecipeManagerAccessor"
   ]

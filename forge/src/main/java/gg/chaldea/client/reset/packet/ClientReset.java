@@ -90,6 +90,14 @@ public class ClientReset {
 	public static final boolean RECIPE_CACHE_ENABLED = true;
 
 	/**
+	 * TagCache — marker-based cache that skips handleUpdateTags entirely when
+	 * the same payload was already applied to the current registry state.
+	 * Tags persist in registries across CRP soft resets, so re-binding the
+	 * same map is wasted work (~100-300ms per switch).
+	 */
+	public static final boolean TAG_CACHE_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list

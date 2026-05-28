@@ -3,6 +3,7 @@ package gg.chaldea.client.reset.packet.mixin;
 import gg.chaldea.client.reset.packet.ClientReset;
 import gg.chaldea.client.reset.packet.RecipeCache;
 import gg.chaldea.client.reset.packet.RegistryCacheState;
+import gg.chaldea.client.reset.packet.SeamlessTransition;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket;
@@ -55,6 +56,9 @@ public abstract class MixinClientPacketListenerRecipeCache {
             acc.crp$setByName(cached.byName);
             LOGGER.info("[RecipeCache] HIT — full bypass, swapped {} recipes (hash_ms={}, saved ~5s: replaceRecipes + setupCollections + event)",
                 cached.byName.size(), hashMs);
+            if (SeamlessTransition.tRecipesApplied == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+                SeamlessTransition.tRecipesApplied = System.nanoTime();
+            }
             // setupCollections is skipped — ClientRecipeBook keeps state from previous
             // connect which used the same modset and therefore the same recipes.
             // Forge RecipesUpdatedEvent also not posted — same-modset listeners
