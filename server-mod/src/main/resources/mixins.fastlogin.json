@@ -10,7 +10,10 @@
     "MixinHandshakeHandlerBatch",
     "LoginWrapperAccessor",
     "MixinGameData",
-    "MixinForgeHooksReadLevelData"
+    "MixinForgeHooksReadLevelData",
+    "MixinRegionFileStorageParallel",
+    "MixinIOWorkerParallel",
+    "MixinServerPacketTiming"
   ],
   "client": []
 }

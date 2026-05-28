@@ -63,6 +63,31 @@ public class FastLoginMod {
      */
     public static final boolean CHUNK_FLUSH_ENABLED = true;
 
+    /**
+     * Parallel IOWorker reads.
+     *
+     * Vanilla IOWorker routes every chunk load through a single-threaded
+     * ProcessorMailbox — even though the underlying Util.ioPool() is
+     * multi-threaded. Result: for a player joining with view-distance 10
+     * (~441 chunks across ~9 region files), all reads serialize, taking 7-10s
+     * on cold chunks even on fast NVMe SSDs.
+     *
+     * This flag activates two mixins working together:
+     *   - MixinIOWorkerParallel — redirects loadAsync() to a dedicated parallel
+     *     pool (size: min(8, cores/2)), bypassing the mailbox queue entirely.
+     *   - MixinRegionFileStorageParallel — makes read() thread-safe by locking
+     *     only the cache lookup (microseconds), so actual disk I/O happens in
+     *     parallel across different RegionFiles.
+     *
+     * Writes are NOT touched — store() still goes through the mailbox, preserving
+     * FIFO write ordering. A pending-write check falls back to the vanilla path
+     * for the rare "write then immediate read" race, so consistency is preserved.
+     *
+     * Expected impact: chunk load 7-10s → 1-2s on cold spawn-chunks.
+     * Safe to disable if any thread-safety regression is suspected.
+     */
+    public static final boolean PARALLEL_IO_ENABLED = true;
+
     /** Packet IDs – must not clash with CRP (98) or Forge internals. */
     public static final int ID_S2C_CHALLENGE = 96;
     public static final int ID_C2S_RESPONSE  = 97;
