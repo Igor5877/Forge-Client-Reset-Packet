@@ -8,9 +8,13 @@ import net.minecraftforge.eventbus.api.Event;
 import net.minecraftforge.eventbus.api.IEventBus;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket;
+import net.minecraft.network.protocol.game.ClientboundUpdateTagsPacket;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Phase 3 — suppress REI full reload during same-modset CRP server switches.
@@ -68,6 +72,13 @@ public class MixinClientPacketListenerRecipeSkip {
         return bus.post(event);
     }
 
+    @Inject(method = "handleUpdateRecipes", at = @At("RETURN"))
+    private void crp$markRecipesApplied(ClientboundUpdateRecipesPacket packet, CallbackInfo ci) {
+        if (SeamlessTransition.tRecipesApplied == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+            SeamlessTransition.tRecipesApplied = System.nanoTime();
+        }
+    }
+
     // -------------------------------------------------------------------------
     // handleUpdateTags — suppress TagsUpdatedEvent (REI START phase ~0.9s)
     // Forge injects: MinecraftForge.EVENT_BUS.post(new TagsUpdatedEvent(...))
@@ -91,5 +102,12 @@ public class MixinClientPacketListenerRecipeSkip {
             return false;
         }
         return bus.post(event);
+    }
+
+    @Inject(method = "handleUpdateTags", at = @At("RETURN"))
+    private void crp$markTagsApplied(ClientboundUpdateTagsPacket packet, CallbackInfo ci) {
+        if (SeamlessTransition.tTagsApplied == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+            SeamlessTransition.tTagsApplied = System.nanoTime();
+        }
     }
 }

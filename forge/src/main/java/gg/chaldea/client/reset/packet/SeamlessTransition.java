@@ -48,7 +48,11 @@ public class SeamlessTransition {
     // so each transition gets fresh deltas instead of only the first one.
     public static volatile long tReset = 0L;
     public static volatile long tLoginSuccess = 0L;
+    public static volatile long tJoinGame = 0L;
     public static volatile long tFirstChunk = 0L;
+    public static volatile long tTagsApplied = 0L;
+    public static volatile long tRecipesApplied = 0L;
+    public static volatile long tPlayerPosition = 0L;
 
     public static void begin() {
         active = true;
@@ -62,6 +66,10 @@ public class SeamlessTransition {
     public static void resetMarkers() {
         tReset = System.nanoTime();
         tLoginSuccess = 0L;
+        tJoinGame = 0L;
         tFirstChunk = 0L;
+        tTagsApplied = 0L;
+        tRecipesApplied = 0L;
+        tPlayerPosition = 0L;
     }
 }

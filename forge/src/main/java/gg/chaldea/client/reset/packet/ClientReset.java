@@ -82,6 +82,14 @@ public class ClientReset {
 	public static final boolean SKIP_RECIPE_EVENTS_ENABLED = true;
 
 	/**
+	 * RecipeCache — in-memory swap of RecipeManager.recipes Map on same-modset switch.
+	 * Vanilla rebuild of ~10000 modded recipes takes ~3-4s; cache hit is O(1).
+	 * Cache key = lastReceivedServerHash + content hash of recipe list, so any
+	 * server-side /reload changing recipes auto-invalidates via content mismatch.
+	 */
+	public static final boolean RECIPE_CACHE_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list

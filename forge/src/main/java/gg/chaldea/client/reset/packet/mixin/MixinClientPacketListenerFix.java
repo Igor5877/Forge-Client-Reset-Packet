@@ -4,6 +4,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ReceivingLevelScreen;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -19,6 +20,13 @@ import gg.chaldea.client.reset.packet.FrozenFrameScreen;
 public class MixinClientPacketListenerFix {
 
     private static final Logger LOGGER = LogManager.getLogger();
+
+    @Inject(method = "handleLogin", at = @At("RETURN"))
+    private void onJoinGame(ClientboundLoginPacket packet, CallbackInfo ci) {
+        if (SeamlessTransition.tJoinGame == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+            SeamlessTransition.tJoinGame = System.nanoTime();
+        }
+    }
 
     // Тригер 1: Знімаємо екран при отриманні першого чанку світу
     @Inject(method = "handleLevelChunkWithLight", at = @At("RETURN"))
@@ -53,7 +61,26 @@ public class MixinClientPacketListenerFix {
             SeamlessTransition.skipRecipeEvents = false;
             LOGGER.info("[Phase3] skipRecipeEvents reset at player_position (T6) — REI can reload normally from now");
         }
+        if (SeamlessTransition.tPlayerPosition == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+            SeamlessTransition.tPlayerPosition = System.nanoTime();
+            logBreakdown();
+        }
         checkAndCloseLoadingScreen();
+    }
+
+    private static long ms(long fromNs, long toNs) {
+        return (fromNs == 0L || toNs == 0L) ? -1L : (toNs - fromNs) / 1_000_000L;
+    }
+
+    private static void logBreakdown() {
+        long t4 = SeamlessTransition.tLoginSuccess;
+        long tJoin = SeamlessTransition.tJoinGame;
+        long tRec = SeamlessTransition.tRecipesApplied;
+        long tTag = SeamlessTransition.tTagsApplied;
+        long tPos = SeamlessTransition.tPlayerPosition;
+        LOGGER.info(
+            "[FastLogin][T6/breakdown] login→join={}ms join→recipes={}ms recipes→tags={}ms tags→pos={}ms total(T4→T6)={}ms",
+            ms(t4, tJoin), ms(tJoin, tRec), ms(tRec, tTag), ms(tTag, tPos), ms(t4, tPos));
     }
 
     private void checkAndCloseLoadingScreen() {

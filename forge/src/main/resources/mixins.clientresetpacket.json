@@ -19,6 +19,8 @@
     "MixinClientPacketListenerFix",
     "MixinClientPacketListenerReset",
     "MixinClientPacketListenerRecipeSkip",
-    "MixinHandshakeHandlerCache"
+    "MixinClientPacketListenerRecipeCache",
+    "MixinHandshakeHandlerCache",
+    "RecipeManagerAccessor"
   ]
 }
