@@ -47,6 +47,33 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
             System.currentTimeMillis() - t[0]);
       }
 
+      // Cache the backend's registry fingerprint for future sameModset checks.
+      //
+      // In the !clientPhase.consideredComplete() path (both initial connect and CRP
+      // re-handshake after reset), backend RegistryPackets are accumulated into
+      // clientPhase.forgeHandshake via addRegistry(). At login_success time the
+      // client phase is still IN_PROGRESS and its forgeHandshake already holds all
+      // registry checksums — capture them now.
+      //
+      // The previous BACKEND_REGISTRY_CACHE.put() inside the else/ModListPacket branch
+      // (compatibility-check path) is dead code for CRP players because that branch
+      // requires getResetType() != CRP, which is never true once CRP is detected.
+      // This is the correct place to populate the cache for CRP players.
+      VelocityForgeClientConnectionPhase clientPhase =
+          (VelocityForgeClientConnectionPhase) player.getPhase();
+      Map<String, Long> regs = clientPhase.forgeHandshake.getRegistries();
+      String serverName = serverCon.getServerInfo().getName();
+      if (!regs.isEmpty()) {
+        BACKEND_REGISTRY_CACHE.put(serverName, new HashMap<>(regs));
+        Ambassador.getInstance().logger.info(
+            "[sameModset] Cached registry fingerprint for '{}' ({} registries) at login_success",
+            serverName, regs.size());
+      } else {
+        Ambassador.getInstance().logger.warn(
+            "[sameModset] forgeHandshake.registries empty at login_success for '{}' — cache NOT populated",
+            serverName);
+      }
+
       serverCon.getConnection().getChannel().pipeline().addBefore(Connections.MINECRAFT_DECODER,
               ForgeConstants.COMMAND_ERROR_CATCHER,
               new CommandDecoderErrorCatcher(serverCon.getConnection().getProtocolVersion(),player));
@@ -82,12 +109,17 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
    * Key:   server name (from RegisteredServer.getServerInfo().getName())
    * Value: defensive copy of ForgeHandshake.getRegistries() — Map<registryName, Adler32>
    *
-   * Populated after a successful isCompatible() check so we know the backend's
-   * registry fingerprint is consistent with a known-good client handshake.
+   * Populated in two places:
+   *   1. IN_PROGRESS.onLoginSuccess() — for CRP players (main path). After a CRP
+   *      re-handshake, backend registries accumulate in clientPhase.forgeHandshake
+   *      via the !consideredComplete() branch; we snapshot them here.
+   *   2. else/ModListPacket isCompatible() block — for non-CRP compatibility-check
+   *      path (legacy; never reached for CRP players).
    *
    * Used to detect "same modset" transitions: if the fingerprints of
    * old backend and new backend are equal, we send fastlogin:same_modset to
-   * the client BEFORE the CRP reset packet, enabling Phase 2 chunk-buffer reuse.
+   * the client BEFORE the CRP reset packet, enabling Phase 2 chunk-buffer reuse
+   * (keepChunkBuffers) and Phase 3 REI skip (skipRecipeEvents).
    *
    * Concurrency: ConcurrentHashMap for thread-safe reads/writes; values are
    * immutable HashMap snapshots taken at store time.

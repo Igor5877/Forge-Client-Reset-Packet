@@ -31,19 +31,28 @@ public class MixinClientPacketListenerFix {
             LOGGER.info("[FastLogin][T5] first_chunk since_login_ms={} since_reset_ms={}",
                 sinceLogin, sinceReset);
         }
-        // Phase 3: reset skipRecipeEvents at first chunk — transition window is over.
-        // Any subsequent UpdateRecipesPacket (e.g. from world-specific datapacks later)
-        // must fire normally.
-        if (SeamlessTransition.skipRecipeEvents) {
-            SeamlessTransition.skipRecipeEvents = false;
-            LOGGER.info("[Phase3] skipRecipeEvents reset at first_chunk — REI can reload normally from now");
-        }
+        // NOTE: skipRecipeEvents is NOT reset here.
+        // In Forge 1.20.1 the server can send UpdateRecipesPacket AFTER the first chunk
+        // (Recipes come later than Tags in the play-phase initialization sequence).
+        // We therefore defer the reset to handleMovePlayer (T6) which is guaranteed
+        // to arrive after both TagsUpdatedEvent and RecipesUpdatedEvent are processed.
         checkAndCloseLoadingScreen();
     }
 
-    // Тригер 2 (Резервний): Знімаємо екран, коли сервер позиціонує гравця на острові
+    // Тригер 2 (Резервний/Phase3 reset): Знімаємо екран і скидаємо skipRecipeEvents
+    // коли сервер позиціонує гравця. PlayerPositionPacket завжди приходить після
+    // UpdateTags і UpdateRecipes, тому це безпечне місце для скидання Phase 3.
     @Inject(method = "handleMovePlayer", at = @At("RETURN"))
     private void onPlayerPosition(ClientboundPlayerPositionPacket packet, CallbackInfo ci) {
+        // Phase 3: reset skipRecipeEvents when server positions the player — transition
+        // window is definitively over. Both TagsUpdatedEvent and RecipesUpdatedEvent
+        // are guaranteed to have been processed before the server sends player position.
+        // Any UpdateRecipesPacket arriving after player position (e.g. from a late
+        // world-specific datapack reload) must fire normally.
+        if (SeamlessTransition.skipRecipeEvents) {
+            SeamlessTransition.skipRecipeEvents = false;
+            LOGGER.info("[Phase3] skipRecipeEvents reset at player_position (T6) — REI can reload normally from now");
+        }
         checkAndCloseLoadingScreen();
     }
 
