@@ -43,6 +43,14 @@ public class SeamlessTransition {
     // Reset to false by MixinClientPacketListenerFix.onChunkReceived (T5 marker).
     public static volatile boolean skipRecipeEvents = false;
 
+    // Set to true by MixinUpdateRecipesPacketSkip when it discards the recipe
+    // packet bytes without parsing them (same-modset switch + cache present).
+    // Read at HEAD of MixinClientPacketListenerRecipeCache.handleUpdateRecipes:
+    // when true, the incoming packet's recipe list is empty by design, so we
+    // apply the cached recipe maps by fingerprint instead of hashing the (empty)
+    // list. Consumed (reset to false) there.
+    public static volatile boolean recipePacketSkipped = false;
+
     // Timing markers — populated by mixins so we can compute deltas in logs.
     // Reset to 0L at the start of each reset cycle (ClientReset.handleClear)
     // so each transition gets fresh deltas instead of only the first one.
@@ -64,6 +72,7 @@ public class SeamlessTransition {
 
     /** Reset all per-cycle markers. Called from ClientReset.handleClear. */
     public static void resetMarkers() {
+        recipePacketSkipped = false;
         tReset = System.nanoTime();
         tLoginSuccess = 0L;
         tJoinGame = 0L;

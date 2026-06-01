@@ -43,6 +43,15 @@ public class RecipeCache {
     private static final ConcurrentHashMap<String, CachedRecipes> CACHE = new ConcurrentHashMap<>();
 
     /**
+     * Secondary index keyed by modset fingerprint only (the part of the cache
+     * key before the ':' content hash). Lets RecipeSkipParse retrieve the
+     * recipe set when the packet was discarded without parsing — we know the
+     * fingerprint but not the content hash. Same modset → same baked recipes,
+     * so the latest entry per fingerprint is the right one.
+     */
+    private static final ConcurrentHashMap<String, CachedRecipes> BY_FP = new ConcurrentHashMap<>();
+
+    /**
      * Hash an iterable of recipes by XOR-combining (id.hashCode() * 31 ^ type.hashCode()).
      * Order-independent so the same recipe set always produces the same hash.
      * Caller must ensure the Iterable can be iterated again (List works).
@@ -69,14 +78,26 @@ public class RecipeCache {
     }
 
     public static void put(String key, Map recipes, Map byName) {
-        CACHE.put(key, new CachedRecipes(recipes, byName));
+        CachedRecipes cr = new CachedRecipes(recipes, byName);
+        CACHE.put(key, cr);
+        int sep = key.lastIndexOf(':');
+        if (sep > 0) {
+            BY_FP.put(key.substring(0, sep), cr);
+        }
         LOGGER.info("[RecipeCache] STORED key={} ({} recipes, {} types)",
             key, byName.size(), recipes.size());
+    }
+
+    /** Retrieve cached recipes by modset fingerprint alone (no content hash).
+     *  Used by RecipeSkipParse when the packet bytes were discarded. */
+    public static CachedRecipes getByFingerprint(String modsetFp) {
+        return modsetFp == null ? null : BY_FP.get(modsetFp);
     }
 
     public static void invalidateAll(String reason) {
         int n = CACHE.size();
         CACHE.clear();
+        BY_FP.clear();
         if (n > 0) {
             LOGGER.info("[RecipeCache] INVALIDATED {} entries (reason: {})", n, reason);
         }

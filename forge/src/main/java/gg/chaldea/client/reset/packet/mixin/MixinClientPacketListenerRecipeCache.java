@@ -44,6 +44,32 @@ public abstract class MixinClientPacketListenerRecipeCache {
         String fp = RegistryCacheState.lastInjectedFingerprint;
         if (fp == null) return;
 
+        // RecipeSkipParse: MixinUpdateRecipesPacketSkip discarded the recipe bytes
+        // without parsing them, so packet.getRecipes() is empty by design. Apply the
+        // cached recipe set by fingerprint instead of hashing the (empty) list.
+        if (SeamlessTransition.recipePacketSkipped) {
+            SeamlessTransition.recipePacketSkipped = false; // consume
+            RecipeCache.CachedRecipes cached = RecipeCache.getByFingerprint(fp);
+            if (cached != null) {
+                RecipeManagerAccessor acc = (RecipeManagerAccessor) recipeManager;
+                acc.crp$setRecipes(cached.recipes);
+                acc.crp$setByName(cached.byName);
+                LOGGER.info("[RecipeCache] SKIP-PARSE HIT — applied {} cached recipes by fingerprint (no decode, no rebuild)",
+                    cached.byName.size());
+                if (SeamlessTransition.tRecipesApplied == 0L && SeamlessTransition.tLoginSuccess != 0L) {
+                    SeamlessTransition.tRecipesApplied = System.nanoTime();
+                }
+                ci.cancel();
+                return;
+            }
+            // Defensive: skip was armed (cache present at decode) but the entry vanished.
+            // The packet list is empty; there is nothing to rebuild from. Log loudly —
+            // recipes will be empty until the next /reload or reconnect.
+            LOGGER.warn("[RecipeCache] SKIP-PARSE armed but no cache for fp={} — recipes empty this switch",
+                fp.substring(0, Math.min(12, fp.length())));
+            return;
+        }
+
         long t0 = System.nanoTime();
         long contentHash = RecipeCache.computeHash(packet.getRecipes());
         String key = RecipeCache.makeKey(fp, contentHash);

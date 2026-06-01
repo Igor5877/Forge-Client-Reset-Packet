@@ -98,6 +98,18 @@ public class ClientReset {
 	public static final boolean TAG_CACHE_ENABLED = true;
 
 	/**
+	 * RecipeSkipParse — skip the network DECODE of the recipe packet on a
+	 * same-modset switch. RecipeCache (above) only saves post-decode work
+	 * (replaceRecipes + setupCollections); the vanilla constructor still
+	 * deserializes all ~18000 recipes off the wire (~1-1.5s) BEFORE our handler
+	 * runs. When skipRecipeEvents=true (sameModset confirmed) AND we already hold
+	 * a cached recipe set for the current fingerprint, MixinUpdateRecipesPacketSkip
+	 * discards the recipe bytes without parsing them and we apply the cached
+	 * recipes by fingerprint instead. Cold cache (fresh client) → parse normally.
+	 */
+	public static final boolean RECIPE_SKIP_PARSE_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list
