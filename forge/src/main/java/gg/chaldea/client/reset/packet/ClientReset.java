@@ -19,6 +19,7 @@ import org.apache.logging.log4j.MarkerManager;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl;
+import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.network.Connection;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraftforge.api.distmarker.Dist;
@@ -278,6 +279,9 @@ public class ClientReset {
 			SeamlessTransition.resetMarkers();
 
 			long captureStart = System.currentTimeMillis();
+			// Carry ServerData across the reset so getCurrentServer() stays non-null
+			// after the switch (see handleReset note) — keeps JEI bookmark saving alive.
+			ServerData prevServerData = mc.getCurrentServer();
 			if (mc.level == null) GameData.revertToFrozen();
 			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
 			SeamlessTransition.begin();
@@ -308,7 +312,7 @@ public class ClientReset {
 			NetworkHooks.registerClientLoginChannel(connection);
 			connection.setProtocol(ConnectionProtocol.LOGIN);
 			connection.setListener(new ClientHandshakePacketListenerImpl(
-				connection, mc, null, null, false, Duration.ZERO, statusMessage -> {}
+				connection, mc, prevServerData, null, false, Duration.ZERO, statusMessage -> {}
 			));
 			mc.pendingConnection = connection;
 
@@ -337,6 +341,15 @@ public class ClientReset {
 
 		logger.info(RESETMARKER, "Received reset packet from server.");
 
+		// Capture the ServerData BEFORE handleClear() → clearLevel() drops the PLAY
+		// listener. Minecraft.getCurrentServer() is derived from the listener's
+		// ServerData (getConnection().getServerData()), so if we recreate the
+		// handshake listener with null here it stays null after the switch — and
+		// anything keyed on the current server breaks. Notably JEI resolves its
+		// per-world bookmark path from getCurrentServer(); with null it silently
+		// stops saving bookmarks. Carry the ServerData across the reset.
+		ServerData prevServerData = Minecraft.getInstance().getCurrentServer();
+
 		if (!handleClear(context)) {
 			return;
 		}
@@ -345,7 +358,7 @@ public class ClientReset {
 		connection.setProtocol(ConnectionProtocol.LOGIN);
 		// 1.20.1 constructor: (Connection, Minecraft, ServerData, Screen, boolean quickPlay, Duration, Consumer<Component>)
 		connection.setListener(new ClientHandshakePacketListenerImpl(
-				connection, Minecraft.getInstance(), null, null, false, Duration.ZERO, statusMessage -> {}
+				connection, Minecraft.getInstance(), prevServerData, null, false, Duration.ZERO, statusMessage -> {}
 		));
 		Minecraft.getInstance().pendingConnection = connection;
 		context.setPacketHandled(true);
