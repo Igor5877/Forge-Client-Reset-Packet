@@ -23,6 +23,12 @@ public class FrozenFrameScreen extends Screen {
 
     private DynamicTexture texture;
     private boolean hasTexture = false;
+    // Safety valve: never hold the frozen frame longer than this, even if the
+    // terrain-compiled check below never turns true (mirrors vanilla
+    // ReceivingLevelScreen's 30s limit, but shorter - a stuck frame feels worse
+    // than a brief void flash).
+    private static final long MAX_HOLD_MS = 10_000L;
+    private final long createdAt = System.currentTimeMillis();
 
     private FrozenFrameScreen() {
         super(Component.empty());
@@ -77,8 +83,21 @@ public class FrozenFrameScreen extends Screen {
     @Override
     public void tick() {
         Minecraft mc = Minecraft.getInstance();
-        // End transition once the new world and local player are both present
-        if (mc.level != null && mc.player != null) {
+        // Still handshaking / no world yet - keep holding the frame.
+        if (mc.level == null || mc.player == null) {
+            return;
+        }
+        // Same readiness condition vanilla's ReceivingLevelScreen uses: dismiss
+        // only once the chunk section at the player's feet is actually compiled
+        // (or the player can't meaningfully wait for one). Dismissing merely on
+        // level+player being present dropped the frame ~1s before any terrain
+        // existed, exposing the raw void - the opposite of seamless.
+        var pos = mc.player.blockPosition();
+        boolean terrainReady = mc.level.isOutsideBuildHeight(pos.getY())
+                || mc.levelRenderer.isChunkCompiled(pos)
+                || mc.player.isSpectator()
+                || !mc.player.isAlive();
+        if (terrainReady || System.currentTimeMillis() > createdAt + MAX_HOLD_MS) {
             SeamlessTransition.end();
             mc.setScreen(null);
         }

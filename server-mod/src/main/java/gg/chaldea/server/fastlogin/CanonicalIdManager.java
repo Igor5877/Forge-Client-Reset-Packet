@@ -88,8 +88,21 @@ public final class CanonicalIdManager {
         int snapCount;
         try {
             CompoundTag registries = new CompoundTag();
+            // takeSnapshot(false) = the "synced" set (everything sent to the
+            // client during FML handshake, ~32 registries) rather than
+            // takeSnapshot(true) = "persisted" only (~21, what Forge itself
+            // writes to level.dat). The extra ones (MENU_TYPES, PARTICLE_TYPES,
+            // BLOCK_ENTITY_TYPES, RECIPE_SERIALIZERS, COMMAND_ARGUMENT_TYPES,
+            // FLUID_TYPES, ...) aren't world-save-critical, but their numeric
+            // IDs still get compared by the client's CRP fast-switch fingerprint
+            // - leaving them out of canonical meant two backends with identical
+            // mods never actually matched, so every switch fell back to the
+            // slow full-reinject path. ForgeHooks.readAdditionalLevelSaveData
+            // applies whatever keys are present in the "Registries" tag
+            // generically (no persisted-only filter), so simply writing more
+            // keys here is enough - no change needed on the read side.
             Map<ResourceLocation, ForgeRegistry.Snapshot> snap =
-                    RegistryManager.ACTIVE.takeSnapshot(true);
+                    RegistryManager.ACTIVE.takeSnapshot(false);
             snapCount = snap.size();
             for (Map.Entry<ResourceLocation, ForgeRegistry.Snapshot> e : snap.entrySet()) {
                 registries.put(e.getKey().toString(), e.getValue().write());

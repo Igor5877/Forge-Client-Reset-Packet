@@ -93,10 +93,19 @@ public class ClientReset {
 	/**
 	 * TagCache — marker-based cache that skips handleUpdateTags entirely when
 	 * the same payload was already applied to the current registry state.
-	 * Tags persist in registries across CRP soft resets, so re-binding the
-	 * same map is wasted work (~100-300ms per switch).
+	 *
+	 * PERMANENTLY DISABLED: the premise ("tags persist in registries across CRP
+	 * soft resets") is wrong. ClientPacketListener.handleLogin unconditionally
+	 * calls resetTags() on every registry for non-memory connections BEFORE any
+	 * UpdateTagsPacket arrives, wiping all bindings. With the full bypass active
+	 * the wiped tags were never re-bound, silently breaking everything
+	 * tag-driven — most visibly Tier.isCorrectToolForDrops (needs_stone_tool
+	 * etc.), i.e. "stone pickaxe can't mine stone" until a full reconnect.
+	 * Re-binding costs only ~100-300ms; the big win (skipping the ~0.9s REI
+	 * reload) comes from Phase 3 TagsUpdatedEvent suppression, which is separate
+	 * and unaffected.
 	 */
-	public static final boolean TAG_CACHE_ENABLED = true;
+	public static final boolean TAG_CACHE_ENABLED = false;
 
 	/**
 	 * RecipeSkipParse — skip the network DECODE of the recipe packet on a

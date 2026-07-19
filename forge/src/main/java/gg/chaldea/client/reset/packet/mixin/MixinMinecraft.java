@@ -3,6 +3,7 @@ package gg.chaldea.client.reset.packet.mixin;
 import gg.chaldea.client.reset.packet.ClientReset;
 import gg.chaldea.client.reset.packet.SeamlessTransition;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ProgressScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.ReceivingLevelScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -25,12 +26,20 @@ public abstract class MixinMinecraft {
     @Shadow private void updateScreenAndTick(Screen p_91363_) { throw new AssertionError(); }
 
     /**
-     * Suppress the "Downloading terrain..." screen during a seamless server transition.
+     * Suppress the vanilla loading screens during a seamless server transition.
      * Our FrozenFrameScreen keeps the last rendered frame visible until the new world is ready.
+     *
+     * ProgressScreen must be suppressed too: Minecraft.setLevel() (called from
+     * ClientPacketListener.handleLogin) runs updateScreenAndTick(new ProgressScreen(...))
+     * ("connect.joining"). If that setScreen goes through, it replaces FrozenFrameScreen,
+     * whose removed() ends the transition (active=false) - and the very next line of
+     * handleLogin sets ReceivingLevelScreen unsuppressed, which is exactly the
+     * "Downloading terrain" dirt screen the seamless switch is meant to hide.
      */
     @Inject(method = "setScreen", at = @At("HEAD"), cancellable = true)
     private void crp$suppressLoadingScreen(Screen screen, CallbackInfo ci) {
-        if (SeamlessTransition.active && screen instanceof ReceivingLevelScreen) {
+        if (SeamlessTransition.active
+                && (screen instanceof ReceivingLevelScreen || screen instanceof ProgressScreen)) {
             ci.cancel();
         }
     }

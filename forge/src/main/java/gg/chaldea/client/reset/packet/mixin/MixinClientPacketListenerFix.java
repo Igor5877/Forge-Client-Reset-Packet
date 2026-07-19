@@ -111,16 +111,15 @@ public class MixinClientPacketListenerFix {
     private void checkAndCloseLoadingScreen() {
         Minecraft mc = Minecraft.getInstance();
 
-        // Dismiss ONLY the transition's own loading/frozen screen — never a real GUI.
-        // Previously this was gated on SeamlessTransition.active and closed whatever
-        // screen was open (mc.screen != null) on every chunk/position packet. Since
-        // `active` can leak true (FrozenFrameScreen.removed() didn't call end()), the
-        // player got kicked out of inventory/chat every time a chunk loaded. Checking
-        // the concrete screen type — re-checked inside execute() to avoid a race —
-        // closes the transition screen without ever touching the player's own GUI.
-        if (mc.screen instanceof ReceivingLevelScreen || mc.screen instanceof FrozenFrameScreen) {
+        // Dismiss ONLY a leftover vanilla loading screen — never a real GUI, and
+        // never FrozenFrameScreen: the frozen frame now dismisses itself in its
+        // own tick() once the chunk under the player is actually compiled
+        // (vanilla ReceivingLevelScreen's readiness condition). Closing it here
+        // on the first chunk/position packet dropped the frame ~1s before any
+        // terrain was renderable, exposing the raw void.
+        if (mc.screen instanceof ReceivingLevelScreen) {
             mc.execute(() -> {
-                if (mc.screen instanceof ReceivingLevelScreen || mc.screen instanceof FrozenFrameScreen) {
+                if (mc.screen instanceof ReceivingLevelScreen) {
                     mc.setScreen(null);
                 }
             });
