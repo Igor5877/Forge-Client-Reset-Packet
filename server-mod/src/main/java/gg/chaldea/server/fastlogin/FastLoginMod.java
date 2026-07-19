@@ -88,6 +88,15 @@ public class FastLoginMod {
      */
     public static final boolean PARALLEL_IO_ENABLED = true;
 
+    /**
+     * Deferred recipe send ("recipe_offer" protocol) — see RecipeDeferState.
+     * Instead of pushing the multi-MB UpdateRecipesPacket at join, the server
+     * offers its recipe epoch; CRP clients with a matching cache ack "ok" and
+     * the packet is never sent. No-mod/no-cache clients get the full packet
+     * after their ack or a 3s timeout. Kill switch: false = vanilla behavior.
+     */
+    public static final boolean RECIPE_DEFER_ENABLED = true;
+
     /** Packet IDs – must not clash with CRP (98) or Forge internals. */
     public static final int ID_S2C_CHALLENGE = 96;
     public static final int ID_C2S_RESPONSE  = 97;
@@ -99,6 +108,22 @@ public class FastLoginMod {
         IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();
         bus.addListener(FastLoginMod::onCommonSetup);
         MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onServerStarted);
+        MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onServerTick);
+        MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onDatapackSync);
+    }
+
+    private static void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent event) {
+        if (event.phase == net.minecraftforge.event.TickEvent.Phase.END) {
+            RecipeDeferState.flushExpired();
+        }
+    }
+
+    private static void onDatapackSync(net.minecraftforge.event.OnDatapackSyncEvent event) {
+        // player == null → /reload broadcast: recipes may have changed, new epoch.
+        // (per-player join events carry the joining player and must NOT re-stamp)
+        if (event.getPlayer() == null) {
+            RecipeDeferState.stampEpoch("datapack reload");
+        }
     }
 
     private static void onCommonSetup(FMLCommonSetupEvent event) {
@@ -162,6 +187,8 @@ public class FastLoginMod {
     }
 
     private static void onServerStarted(ServerStartedEvent event) {
+        // Recipe defer protocol goes live only once the server is fully up.
+        RecipeDeferState.stampEpoch("server started");
         // Compute registry hash after all mods have registered everything
         RegistryHashUtil.computeAndCache();
         // Phase 3 diagnostic — dump server-side fingerprint so we can compare

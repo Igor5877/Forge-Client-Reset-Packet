@@ -13,7 +13,9 @@
     "MixinForgeHooksReadLevelData",
     "MixinRegionFileStorageParallel",
     "MixinIOWorkerParallel",
-    "MixinServerPacketTiming"
+    "MixinServerPacketTiming",
+    "MixinPlayerListDeferRecipes",
+    "MixinServerGamePacketListenerRecipeAck"
   ],
   "client": []
 }

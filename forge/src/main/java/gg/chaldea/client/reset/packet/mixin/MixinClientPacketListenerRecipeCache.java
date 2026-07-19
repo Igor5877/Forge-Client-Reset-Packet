@@ -36,6 +36,17 @@ public abstract class MixinClientPacketListenerRecipeCache {
     @Unique
     private String crp$pendingRecipeCacheKey;
 
+    /** If a recipe_offer preceded this full packet (ack "need"/timeout path),
+     *  tie the applied cache entry to that epoch for future skips. */
+    @Unique
+    private static void crp$associatePendingEpoch(RecipeCache.CachedRecipes cached) {
+        long epoch = RecipeCache.lastOfferEpoch;
+        if (epoch != 0L) {
+            RecipeCache.lastOfferEpoch = 0L;
+            RecipeCache.associateEpoch(epoch, cached);
+        }
+    }
+
     @Inject(method = "handleUpdateRecipes", at = @At("HEAD"), cancellable = true, require = 1)
     private void crp$useRecipeCache(ClientboundUpdateRecipesPacket packet, CallbackInfo ci) {
         crp$pendingRecipeCacheKey = null;
@@ -51,6 +62,7 @@ public abstract class MixinClientPacketListenerRecipeCache {
             SeamlessTransition.recipePacketSkipped = false; // consume
             RecipeCache.CachedRecipes cached = RecipeCache.getByFingerprint(fp);
             if (cached != null) {
+                crp$associatePendingEpoch(cached);
                 RecipeManagerAccessor acc = (RecipeManagerAccessor) recipeManager;
                 acc.crp$setRecipes(cached.recipes);
                 acc.crp$setByName(cached.byName);
@@ -77,6 +89,7 @@ public abstract class MixinClientPacketListenerRecipeCache {
 
         RecipeCache.CachedRecipes cached = RecipeCache.get(key);
         if (cached != null) {
+            crp$associatePendingEpoch(cached);
             RecipeManagerAccessor acc = (RecipeManagerAccessor) recipeManager;
             acc.crp$setRecipes(cached.recipes);
             acc.crp$setByName(cached.byName);
@@ -102,6 +115,14 @@ public abstract class MixinClientPacketListenerRecipeCache {
         if (crp$pendingRecipeCacheKey == null) return;
         RecipeManagerAccessor acc = (RecipeManagerAccessor) recipeManager;
         RecipeCache.put(crp$pendingRecipeCacheKey, acc.crp$getRecipes(), acc.crp$getByName());
+        // recipe_offer protocol: tie the fresh entry to the server epoch this
+        // full packet answered, so the next switch to a server with the same
+        // epoch can skip the packet entirely (ack ok).
+        long epoch = RecipeCache.lastOfferEpoch;
+        if (epoch != 0L) {
+            RecipeCache.lastOfferEpoch = 0L;
+            RecipeCache.associateEpoch(epoch, RecipeCache.get(crp$pendingRecipeCacheKey));
+        }
         crp$pendingRecipeCacheKey = null;
     }
 }

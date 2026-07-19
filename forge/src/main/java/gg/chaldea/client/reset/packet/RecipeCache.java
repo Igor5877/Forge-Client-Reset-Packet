@@ -52,6 +52,31 @@ public class RecipeCache {
     private static final ConcurrentHashMap<String, CachedRecipes> BY_FP = new ConcurrentHashMap<>();
 
     /**
+     * Index keyed by the server's recipe epoch (recipe_offer protocol).
+     * The epoch uniquely identifies a server's recipe generation (re-stamped
+     * at server start and on /reload), so an exact epoch match proves our
+     * cached set is byte-identical to what the server would have sent —
+     * the server can then skip sending the multi-MB recipe packet entirely.
+     */
+    private static final ConcurrentHashMap<Long, CachedRecipes> BY_EPOCH = new ConcurrentHashMap<>();
+
+    /** Epoch from the most recent fastlogin:recipe_offer whose full packet we
+     *  are still waiting for (ack "need" path). Consumed when recipes are
+     *  applied so the freshly stored cache gets associated with it. */
+    public static volatile long lastOfferEpoch = 0L;
+
+    public static void associateEpoch(long epoch, CachedRecipes cr) {
+        if (epoch != 0L && cr != null) {
+            BY_EPOCH.put(epoch, cr);
+            LOGGER.info("[RecipeCache] epoch {} associated with cached recipe set", Long.toHexString(epoch));
+        }
+    }
+
+    public static CachedRecipes getByEpoch(long epoch) {
+        return epoch == 0L ? null : BY_EPOCH.get(epoch);
+    }
+
+    /**
      * Hash an iterable of recipes by XOR-combining (id.hashCode() * 31 ^ type.hashCode()).
      * Order-independent so the same recipe set always produces the same hash.
      * Caller must ensure the Iterable can be iterated again (List works).
@@ -98,6 +123,7 @@ public class RecipeCache {
         int n = CACHE.size();
         CACHE.clear();
         BY_FP.clear();
+        BY_EPOCH.clear();
         if (n > 0) {
             LOGGER.info("[RecipeCache] INVALIDATED {} entries (reason: {})", n, reason);
         }
