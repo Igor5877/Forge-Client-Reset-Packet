@@ -7,6 +7,7 @@ import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ClientConnectionPhase;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.proxy.connection.util.ConnectionMessages;
 import com.velocitypowered.proxy.network.Connections;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
@@ -141,6 +142,22 @@ public enum VelocityForgeClientConnectionPhase implements ClientConnectionPhase 
   public ForgeHandshake forgeHandshake = new ForgeHandshake();
 
   public boolean handle(ConnectedPlayer player, IForgeLoginWrapperPacket<Context.ClientContext> msg, VelocityServerConnection server) {
+
+    if (server == null) {
+      // Client-side handshake packet arrived after the in-flight backend
+      // connection was already cleared (e.g. the backend killed the
+      // connection mid-handshake - PlayerSync kick, crash, etc). Ambassador's
+      // CRP switch doesn't go through Velocity's standard connect() future
+      // chain, so nothing else will notify the client of the failure - if we
+      // just drop the packet the client is left frozen forever. Disconnect
+      // it with the same message Velocity itself uses for this failure mode
+      // so the client can reconnect instead of hanging.
+      Ambassador.getInstance().logger.warn(
+          "[crp] {} sent {} with no connection in flight, disconnecting",
+          player.getUsername(), msg.getClass().getSimpleName());
+      player.disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
+      return true;
+    }
 
     if (msg.getContext().getChannelName().equals("zeta:main")) {
       forgeHandshake.zetaFlagsPacket = (GenericForgeLoginWrapperPacket<Context.ClientContext>) msg;

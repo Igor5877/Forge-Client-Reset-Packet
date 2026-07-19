@@ -266,3 +266,237 @@ If just maintaining:
 - Push the 12 commits to origin (manual, needs user's git creds):
   `git push origin claude/seamless-server-transition-sq7di`
 - Open PR on GitHub if desired.
+
+---
+
+## Session 2026-05-29
+
+### Optimizations landed (3 commits)
+
+1. **`f805a5f` perf(server-mod): parallel chunk I/O + send-timing instrumentation**
+   - `MixinIOWorkerParallel` — bypasses single-threaded mailbox, redirects
+     `IOWorker.loadAsync` to dedicated read pool (min(8, cores/2) threads)
+   - `MixinRegionFileStorageParallel` — brief lock on regionCache only,
+     disk I/O parallel across RegionFiles, retry on `ClosedChannelException`
+   - `MixinServerPacketTiming` — `[SendTiming] Player → Packet +Xms`
+     diagnostic per-player
+   - Writes untouched (FIFO preserved via mailbox path)
+   - Measured: ~3s saved on cold-start chunk load
+
+2. **`ad24dd7` perf(client): RecipeCache full bypass + breakdown timing**
+   - `RecipeCache` in-memory keyed by `(modsetFingerprint + recipeListHash)`
+   - `MixinClientPacketListenerRecipeCache` cancels entire `handleUpdateRecipes`
+     on HIT — skips `replaceRecipes` (~3-4s) + `ClientRecipeBook.setupCollections`
+     (~2-3s) + Forge event
+   - `RecipeManagerAccessor` exposes private `recipes`/`byName` for swap
+   - Auto-invalidates on `GameData.revertToFrozen`
+   - Added T6/breakdown line: `login→join / join→recipes / recipes→tags / tags→pos / total`
+   - Cold connect: unchanged (cache empty). Warm: 6.0s → 4.9s.
+
+3. **`0f31da0` perf(client): TagCache full bypass — warm switch 4.9s → ~0.9s**
+   - `TagCache` marker-only (no payload data) keyed by content hash
+   - `MixinClientPacketListenerTagCache` cancels `handleUpdateTags` on HIT,
+     skipping `Blocks.rebuildCache()` + per-registry `bindTags()` (~3s)
+   - **Most important finding**: cancelling the handler also unblocks the
+     render-thread packet queue — subsequent `handlePlayerPosition` and
+     `handleLevelChunkWithLight` run immediately instead of waiting
+   - Combined stack (all 6 optimizations on): warm switch ~0.9s, best 726ms
+
+### Mod-pack upgrade (mods-nev.zip → 182 new mods)
+
+Big mod update introduced several side-only/version-conflict issues that
+the user worked through:
+
+- **`kubejsoffline`**: declared `side=BOTH` but actually client-only
+  (loads `Screen` class) → crashes dedicated server.
+  Removed from servers.
+- **`morejs`**: `ServiceLoader.load(MoreJSPlatform)` returns empty on
+  Forge 1.20.1 server classloader → NPE at startup.
+  Likely Forge ModuleClassLoader vs `META-INF/services` discovery quirk.
+  Removed from servers (and consequently from client to avoid registry
+  mismatch).
+- **`playersync`**: actually server-only despite `side=BOTH` — tries to
+  open MySQL on client. Removed from client.
+- **`ftb-xmod-compat-forge-2.1.3`**: built against ftb-quests-2001.4.18
+  (`ObjectStartedEvent.getData() → TeamData`) but we run 2001.4.15
+  (`getData() → IslandData` due to NestWorld lineage). `NoSuchMethodError`
+  in `KubeJSIntegration.onStarted`. Removed from servers.
+- **`ftb-quests-forge-2001.4.18`**: removed `TeamManager` class that
+  `nestworld-mods-server-1.2.2` (custom) calls. Downgraded to 2001.4.15
+  everywhere; on Spawn-dev replaced `ftb-quests-NestWorld-2001.4.14`
+  custom fork with vanilla 2001.4.15 for uniform mod set.
+
+### CanonicalID re-sync (Spawn-dev ↔ skyblock-solo)
+
+After mod-pack upgrade backends had different per-server registry ID
+mapping (32 registries each, but different `level.dat` `fml.Registries`
+ordering → fingerprints `5e094b4d…` vs `a35f48ff…`, ~10 bytes diff).
+Proxy held stale 134431-byte canonical from before the upgrade
+(only 20 of 32 registries).
+
+Fix:
+1. Restart `pro-dev` (Velocity) — canonical is in-memory only, wipe
+2. Delete `world/canonical-registry-ids.nbt` on both backends
+3. Start Spawn-dev first → `POST /canonical/register` (203223 bytes,
+   21 Forge registries) → proxy stores it as new canonical
+4. Start solo → `GET /canonical/get` → patches level.dat in-memory
+5. Both backends now share fingerprint `677486f685c1…`
+
+After this RegCache HIT works again on same-modset switch.
+
+### Block-state ID mismatch (unresolved)
+
+User reported blocks rendering as different blocks even on first connect
+(no switching). Diagnosis chain:
+
+- Client side mod versions identical to server ✓
+- RegCache MISS + full inject ran ✓ (cache not stale)
+- Vanilla blocks render correctly, only modded blocks scrambled
+- Affects newly-placed blocks too, not just chunks-from-old-saves
+- Reproducible without Velocity proxy (direct connect to Spawn-dev)
+
+Working theory: **`Block.BLOCK_STATE_REGISTRY` is built once at mod init
+from Block registry order**. `GameData.injectSnapshot` remaps Block IDs
+post-init, but does NOT rebuild the state registry. If server and client
+had different init order (one mod loads scripts that another doesn't,
+or sub-block registration order shifts) → state IDs diverge → wrong
+textures.
+
+Tested by removing `/root/WORLD/` (Oct 2025 era save) and creating a
+fresh void world via `level-type=exdeorum:void`. Did NOT clear the
+mismatch — confirming the issue is live registry sync, not stale chunk
+data.
+
+Created a clean 20×20 stone platform at (0,64,0)-(19,64,19) in void
+world for further investigation. Direct connect on 10.198.126.52:25565
+(proxy stopped, `proxy-compatible-forge` removed temporarily).
+
+### Next session
+
+1. **State ID rebuild**: investigate whether Forge 1.20.1's
+   `IdMappingEvent` actually rebuilds `Block.BLOCK_STATE_REGISTRY` after
+   `injectSnapshot`. If not — that may be the root cause of the block
+   mismatch. Could force-rebuild in CRP client mixin.
+2. **Restore production state**: put `proxy-compatible-forge` back,
+   start `pro-dev`, restore `FASTLOGIN_PROXY_URL` env, switch
+   `level-name` away from `world-test`.
+3. **morejs/kubejsoffline**: re-add somehow (modset alignment) — they
+   were originally `side=BOTH`. Either patch them or upstream-report.
+4. **Image refresh**: rebuild `skyblock-template-v8` once mod set is
+   stable.
+
+---
+
+## Session 2026-06-01
+
+### Context
+Warm switch had regressed to ~16-23s after the user uploaded a new mod build.
+Diagnosed + fixed several things; client jar rebuilt + deployed to
+`~/.minecraftx/instances/1.20.1-forge47.4.20/mods/ForgeClientResetPacket-0.2.1.jar`
+several times. Two commits landed on branch `claude/seamless-server-transition-sq7di`:
+`632e3a1` perf skip-parse, `9a8ed27` fix ServerData. The Phase 4 / GUI-fix work
+below is NOT yet committed (still in working tree).
+
+### 1. Warm-switch regression root cause — FIXED
+Not a code regression. **Spawn-dev's `/opt/minecraft/run.sh` had lost
+`export FASTLOGIN_PROXY_URL="http://10.198.126.8:25700"`** (removed during the
+2026-05-29 direct-connect debugging, never restored — see run.sh.bak from May 29).
+`CanonicalIdManager.saveCanonicalIfAbsent` then took the file-only fallback and
+never POSTed to the proxy, so Spawn-dev (file-mode, canonical 203053) and
+skyblock-solo (proxy-mode, stale 203223 from proxy) had divergent registry
+fingerprints → client RegCache/RecipeCache/TagCache MISS every switch → full
+~16s rebuild. Fix: re-added the env to run.sh, full canonical re-sync (restart
+`pro-dev` proxy → delete `canonical-registry-ids.nbt` on both backends → start
+Spawn-dev first as master → start skyblock). Both now share server fingerprint
+`327556349d8c…`. Warm switch back to ~1.5-3s. **TODO: move FASTLOGIN_PROXY_URL into
+the systemd unit + `skyblock-template-v8` image so it can't drop again; add a WARN
+in the mod when the env is unset; auto-invalidate proxy canonical on modset-hash
+change.** Backends: Spawn-dev=10.198.126.52 (world-flat50), skyblock-solo-Igor=
+10.198.126.51, proxy pro-dev=10.198.126.8, all `lxc … --project SkyBlock-dev`,
+clock is UTC (= Kyiv-3). Island spawn API: `http://api-dev.nestworld.site/api/v1`
+(nestworldvelocity / nestworld-1.4-websoket.jar). Island pre-warm from the launcher
+is ALREADY implemented (so cold-start ~98s is hidden behind login).
+
+### 2. Recipe packet skip-parse — DONE (commit 632e3a1)
+RecipeCache HIT only saved post-decode work; the vanilla
+`ClientboundUpdateRecipesPacket(FriendlyByteBuf)` constructor still deserialized
+~18000 recipes (~1.3s of join→recipes on the Netty thread). New
+`MixinUpdateRecipesPacketSkip` redirects `buf.readList()` in that ctor: on a
+sameModset switch with a cached set for the fingerprint, it discards the bytes
+unparsed and applies cached recipes by fingerprint (new `RecipeCache.BY_FP` index +
+`SeamlessTransition.recipePacketSkipped`). Kill switch `RECIPE_SKIP_PARSE_ENABLED`.
+**Not yet re-measured post-deploy (was item #9 on the list).**
+
+### 3. JEI bookmarks not saving across switch — FIXED (commit 9a8ed27)
+`Minecraft.getCurrentServer()` is NOT a field — it returns
+`getConnection().getServerData()`. Our CRP reset recreated
+`ClientHandshakePacketListenerImpl` with a **null ServerData** in both
+`handleReset` and `handlePlayPhaseReset`, so after the first `/myisland`
+`getCurrentServer()` was null all session. JEI 15.20 keys its per-world bookmark
+file (`config/jei/world/server/<sanitize(name)_hex(ip.hashCode())>/bookmarks.ini`)
+on `getCurrentServer()` (`ServerConfigPathUtil.getWorldPath`); null → `Optional.empty`
+→ `saveBookmarks` silently no-ops. Fix: capture `mc.getCurrentServer()` before
+`clearLevel()` and pass it into the new listener. Confirmed working: bookmarks now
+save+load across switches (shared per-proxy, which is correct for seamless).
+NOTE: pack switched REI→JEI on 2026-05-29; `config/roughlyenoughitems/` is dead
+leftover; mod `jei_copy_recipe_json` throws harmless ClassNotFound for REI/EMI.
+
+### 4. GUI closes on chunk load (kicked out of inventory/chat) — FIXED (uncommitted)
+`MixinClientPacketListenerFix.checkAndCloseLoadingScreen` was gated on
+`SeamlessTransition.active` and did `setScreen(null)` on ANY open screen on every
+chunk/position packet. Root cause: `checkAndCloseLoadingScreen` dismisses the
+FrozenFrameScreen via `setScreen(null)` → routes through `FrozenFrameScreen.removed()`,
+which did NOT call `SeamlessTransition.end()` (only `tick()`/`onClose()` did) → the
+`active` flag leaked true forever → every subsequent chunk closed the player's GUI.
+Two fixes: (a) `FrozenFrameScreen.removed()` now calls `end()`; (b)
+`checkAndCloseLoadingScreen` only dismisses `ReceivingLevelScreen`/`FrozenFrameScreen`,
+never a real GUI. **User confirmed FIXED.**
+
+### 5. JEI ~2.7-5s render-thread freeze on first screen-open after each switch — STILL OPEN
+Confirmed cause: JEI `StartEventObserver` (jei-1.20.1-forge-15.20.0.112) requires
+three Forge events to start: `ClientPlayerNetworkEvent.LoggingIn` + `TagsUpdatedEvent`
++ `RecipesUpdatedEvent`. Our cache HITs **cancel** `handleUpdateRecipes`/`handleUpdateTags`,
+so Forge's `RecipesUpdatedEvent`/`TagsUpdatedEvent` (injected at handler RETURN) never
+fire → JEI stays "not started" → on the first `ScreenEvent.Init.Pre` (inventory) it
+force-starts on the render thread: "A Screen is opening but JEI hasn't started yet"
++ Building ingredient filter ~1.3s + Building runtime ~1.4s + 17819 ingredients =
+single-threaded freeze, **once per switch**. (First-ever start on cold join ~5s is
+normal JEI, unavoidable.)
+
+**Attempted fix (Phase 4 / Option B, uncommitted) — did NOT work.** Added
+`SeamlessTransition.keepClientModState` + kill switch `KEEP_CLIENT_MOD_STATE_ENABLED`,
+set in both sameModset blocks, reset at T6 (handleMovePlayer) and in `resetMarkers()`.
+`@Redirect` on `ForgeHooksClient.firePlayerLogout` (MixinMinecraft.clearLevel) and
+`firePlayerLogin` (MixinClientPacketListenerFix.handleLogin), `require=0`, gated on
+the flag — idea: don't reset JEI on a sameModset switch so it keeps its built state.
+**User reports the freeze still happens.**
+
+**Next session — diagnose why Phase 4 didn't help.** Check client `latest.log`:
+1. Does `[Phase4] keepClientModState=true` appear on switches? If NOT → flag/gating
+   wrong (sameModset false at that point?) or the redirects silently no-op'd
+   (`require=0` → AP couldn't map; Forge classes aren't remapped so it SHOULD match
+   at runtime like `handleClientLevelClosing` does — but verify with a log line inside
+   the redirect, e.g. log when suppressing).
+2. Does "A Screen is opening but JEI hasn't started" STILL appear after a switch? If
+   yes → JEI is still being reset. Then LoggingOut/In suppression isn't enough — JEI
+   may reset via another path (world/level load, or its observer restarts on the
+   recipe/tag packets themselves). Re-examine `StartEventObserver.transitionState`
+   (StartEventObserver.java:130, lambda$register$3:76) — it may reset `observedEvents`
+   on ANY observed event arriving out of order, or on level load.
+3. Likely better fix = **Option A**: after a cache HIT, explicitly re-fire
+   `RecipesUpdatedEvent` + `TagsUpdatedEvent` (and ensure LoggingIn fires) so JEI's
+   required-events set completes and it starts DURING the frozen transition instead
+   of on inventory open. Costs ~2.7s on the switch (hidden behind frozen screen) but
+   removes the interactive freeze. JEI's build is render-thread-bound (touches
+   registry/ItemStack/GL) → cannot be safely multi-threaded by us.
+4. Also verify Phase 4 didn't break other login/logout-keyed mods (Xaero minimap
+   waypoints, voicechat) — if it did and we keep Phase 4, flip
+   `KEEP_CLIENT_MOD_STATE_ENABLED=false`.
+
+### Uncommitted working-tree changes at session end
+Phase 4 + GUI fix across: `ClientReset.java`, `SeamlessTransition.java`,
+`MixinMinecraft.java`, `MixinClientPacketListenerFix.java`, `FrozenFrameScreen.java`,
+plus rebuilt `release/ForgeClientResetPacket-0.2.1.jar` (also deployed to client).
+GUI fix is good to keep; Phase 4 is unproven (freeze persists) — decide next session
+whether to keep, revert, or replace with Option A before committing.
+Also still uncommitted from before: `PROGRESS.md`, `.claude/settings.local.json`.

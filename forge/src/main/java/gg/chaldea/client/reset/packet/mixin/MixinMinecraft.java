@@ -1,10 +1,13 @@
 package gg.chaldea.client.reset.packet.mixin;
 
+import gg.chaldea.client.reset.packet.ClientReset;
 import gg.chaldea.client.reset.packet.SeamlessTransition;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.ReceivingLevelScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.MultiPlayerGameMode;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -67,5 +70,22 @@ public abstract class MixinMinecraft {
         if (!SeamlessTransition.softClear) {
             net.minecraftforge.client.ForgeHooksClient.handleClientLevelClosing(level);
         }
+    }
+
+    // Phase 4 — on a sameModset seamless switch, suppress the LoggingOut event so
+    // client mods (JEI's StartEventObserver, minimaps, voicechat…) keep their state
+    // and don't reset+rebuild. Paired with the firePlayerLogin suppression in
+    // MixinClientPacketListenerFix. require=0: degrades to firing normally if the
+    // call site moves between Forge versions, rather than crashing.
+    @Redirect(
+        method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V",
+        at = @At(value = "INVOKE", target = "Lnet/minecraftforge/client/ForgeHooksClient;firePlayerLogout(Lnet/minecraft/client/multiplayer/MultiPlayerGameMode;Lnet/minecraft/client/player/LocalPlayer;)V"),
+        require = 0
+    )
+    private void crp$skipPlayerLogoutOnSeamless(MultiPlayerGameMode gameMode, LocalPlayer player) {
+        if (ClientReset.KEEP_CLIENT_MOD_STATE_ENABLED && SeamlessTransition.keepClientModState) {
+            return; // suppressed — keep mods "logged in" across the seamless switch
+        }
+        net.minecraftforge.client.ForgeHooksClient.firePlayerLogout(gameMode, player);
     }
 }

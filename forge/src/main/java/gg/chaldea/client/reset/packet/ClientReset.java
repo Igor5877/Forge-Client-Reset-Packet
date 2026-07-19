@@ -111,6 +111,16 @@ public class ClientReset {
 	public static final boolean RECIPE_SKIP_PARSE_ENABLED = true;
 
 	/**
+	 * KeepClientModState — on a same-modset switch, suppress the
+	 * ClientPlayerNetworkEvent LoggingOut/LoggingIn pair so client mods that
+	 * rebuild on login/logout keep their state across the seamless switch.
+	 * Fixes JEI's StartEventObserver force-rebuilding its ingredient filter
+	 * (~2.7s render-thread freeze) on the first screen opened after each switch.
+	 * Gated by sameModset; kill switch to disable if another mod misbehaves.
+	 */
+	public static final boolean KEEP_CLIENT_MOD_STATE_ENABLED = true;
+
+	/**
 	 * Dummy plugin message channel registered solely so Ambassador 1.5.x (non-api)
 	 * detects this mod as CRP-capable via PlayerChannelRegisterEvent. The channel
 	 * carries no real packets — its mere presence in the client's channel list
@@ -282,7 +292,12 @@ public class ClientReset {
 			// Carry ServerData across the reset so getCurrentServer() stays non-null
 			// after the switch (see handleReset note) — keeps JEI bookmark saving alive.
 			ServerData prevServerData = mc.getCurrentServer();
-			if (mc.level == null) GameData.revertToFrozen();
+			// Only skip revertToFrozen when Ambassador VERIFIED matching registry
+			// fingerprints (sameModset=true) - injecting on top of the previous
+			// server's un-reverted registries otherwise leaves stale bindings
+			// (e.g. TierSortingRegistry tool-tier data) that cause bugs like
+			// "correct tool" checks failing until a full reconnect.
+			if (mc.level == null || !SeamlessTransition.sameModset) GameData.revertToFrozen();
 			FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
 			SeamlessTransition.begin();
 			if (SeamlessTransition.sameModset) {
@@ -293,6 +308,10 @@ public class ClientReset {
 				if (SKIP_RECIPE_EVENTS_ENABLED) {
 					SeamlessTransition.skipRecipeEvents = true;
 					logger.info(RESETMARKER, "[Phase3/PLAY] skipRecipeEvents=true — REI reload suppressed");
+				}
+				if (KEEP_CLIENT_MOD_STATE_ENABLED) {
+					SeamlessTransition.keepClientModState = true;
+					logger.info(RESETMARKER, "[Phase4/PLAY] keepClientModState=true — suppress login/logout churn (JEI etc.)");
 				}
 			}
 			SeamlessTransition.sameModset = false; // consumed
@@ -386,7 +405,8 @@ public static boolean handleClear(NetworkEvent.Context context) {
         long captureStart = System.currentTimeMillis();
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) GameData.revertToFrozen();
+        // See handlePlayPhaseReset for why this is gated on sameModset too.
+        if (mc.level == null || !SeamlessTransition.sameModset) GameData.revertToFrozen();
 
         FrozenFrameScreen transitionScreen = FrozenFrameScreen.capture(mc);
         SeamlessTransition.begin();
@@ -404,6 +424,12 @@ public static boolean handleClear(NetworkEvent.Context context) {
                 // doesn't do a full ~2.6s plugin reload on identical recipe sets.
                 SeamlessTransition.skipRecipeEvents = true;
                 logger.info(RESETMARKER, "[Phase3] skipRecipeEvents=true — REI reload suppressed");
+            }
+            if (KEEP_CLIENT_MOD_STATE_ENABLED) {
+                // Phase 4: suppress LoggingOut/LoggingIn so JEI (and other login/logout
+                // listeners) keep their state across the seamless switch — no rebuild.
+                SeamlessTransition.keepClientModState = true;
+                logger.info(RESETMARKER, "[Phase4] keepClientModState=true — suppress login/logout churn (JEI etc.)");
             }
         }
         SeamlessTransition.sameModset = false; // consumed — reset for next cycle

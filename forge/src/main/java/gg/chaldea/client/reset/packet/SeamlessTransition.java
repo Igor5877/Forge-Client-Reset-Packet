@@ -43,6 +43,24 @@ public class SeamlessTransition {
     // Reset to false by MixinClientPacketListenerFix.onChunkReceived (T5 marker).
     public static volatile boolean skipRecipeEvents = false;
 
+    // When true (sameModset seamless switch), suppress the ClientPlayerNetworkEvent
+    // LoggingOut/LoggingIn pair — firePlayerLogout (in Minecraft.clearLevel) and
+    // firePlayerLogin (in ClientPacketListener.handleLogin). Client mods that rebuild
+    // on login/logout then treat the switch as continuous and keep their built state.
+    //
+    // Primary motivation: JEI's StartEventObserver resets on LoggingOut and only
+    // restarts after LoggingIn + TagsUpdatedEvent + RecipesUpdatedEvent. Our cache
+    // HITs cancel the recipe/tag handlers so those two events never fire, leaving JEI
+    // "not started" → it force-rebuilds the whole ingredient filter (~2.7s, single-
+    // threaded on the render thread) the first time any screen opens after a switch.
+    // On a same-modset switch the ingredient set is identical, so the cleanest fix is
+    // to never reset JEI: suppress the login/logout events and it keeps running.
+    //
+    // Set alongside skipRecipeEvents in the sameModset block; reset at T6
+    // (handleMovePlayer) by MixinClientPacketListenerFix. Gated by sameModset, so
+    // cross-modset switches and first connect fire the events normally.
+    public static volatile boolean keepClientModState = false;
+
     // Set to true by MixinUpdateRecipesPacketSkip when it discards the recipe
     // packet bytes without parsing them (same-modset switch + cache present).
     // Read at HEAD of MixinClientPacketListenerRecipeCache.handleUpdateRecipes:
@@ -73,6 +91,7 @@ public class SeamlessTransition {
     /** Reset all per-cycle markers. Called from ClientReset.handleClear. */
     public static void resetMarkers() {
         recipePacketSkipped = false;
+        keepClientModState = false; // cleared at cycle start; set true only if sameModset
         tReset = System.nanoTime();
         tLoginSuccess = 0L;
         tJoinGame = 0L;

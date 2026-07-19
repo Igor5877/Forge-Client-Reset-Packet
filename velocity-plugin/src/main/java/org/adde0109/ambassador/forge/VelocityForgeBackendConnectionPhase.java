@@ -198,36 +198,21 @@ public enum VelocityForgeBackendConnectionPhase implements BackendConnectionPhas
           boolean sameModset = false;
           String reason;
 
+          // Only trust a VERIFIED fingerprint match. We previously guessed via
+          // "any_match_fallback" when one side wasn't cached yet (assuming all
+          // backends share one modpack's registries) - but registry fingerprints
+          // can genuinely differ per-server (e.g. stale per-world
+          // canonical-registry-ids.nbt), and a wrong guess here tells the client
+          // to skip TagsUpdatedEvent/recipe reload, silently leaving it with
+          // stale tool-tier/tag bindings (e.g. correct-tool-for-drops breaks)
+          // until a full reconnect. A slower-but-correct first visit beats that.
           if (oldRegs != null && newRegs != null && oldRegs.equals(newRegs)) {
-            // Both servers in cache and fingerprints match — exact hit.
             sameModset = true;
             reason = "exact_match";
-          } else if (oldRegs != null && newRegs == null) {
-            // New server (e.g. freshly spawned island-{uuid}) not yet in cache.
-            // Fall back to any-match: if any cached server has the same fingerprint
-            // as oldServer, we can safely assume newServer shares the same modset
-            // (all island-* servers run the same jar set as lobby).
-            boolean anyMatch = BACKEND_REGISTRY_CACHE.values().stream()
-                .anyMatch(regs -> regs.equals(oldRegs));
-            if (anyMatch) {
-              sameModset = true;
-              reason = "any_match_fallback(new_server_uncached)";
-            } else {
-              reason = "no_match";
-            }
-          } else if (oldRegs == null && newRegs != null) {
-            // Old server not cached (first ever switch for this player?).
-            // Use any-match on newRegs side.
-            boolean anyMatch = BACKEND_REGISTRY_CACHE.values().stream()
-                .anyMatch(regs -> regs.equals(newRegs));
-            if (anyMatch) {
-              sameModset = true;
-              reason = "any_match_fallback(old_server_uncached)";
-            } else {
-              reason = "no_match";
-            }
+          } else if (oldRegs == null || newRegs == null) {
+            reason = "unverified_uncached";
           } else {
-            reason = oldRegs == null ? "both_absent" : "mismatch";
+            reason = "mismatch";
           }
 
           if (sameModset) {

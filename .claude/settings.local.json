@@ -56,7 +56,15 @@
       "Bash(awk '/20:15:47.003/,/20:16:06.167/' /home/igor/.minecraftx/instances/1.20.1-forge47.4.20/logs/latest.log)",
       "Bash(grep -E \"MixinRecipeManagerCache|crp\\\\\\\\\\\\$\" /home/igor/.minecraftx/instances/1.20.1-forge47.4.20/logs/debug.log)",
       "Bash(awk '/22:20:1[5-9]|22:20:2[0-9]/' /home/igor/.minecraftx/instances/1.20.1-forge47.4.20/logs/latest.log)",
-      "Bash(awk '/22:20:[12][0-9]/' /home/igor/.minecraftx/instances/1.20.1-forge47.4.20/logs/latest.log)"
+      "Bash(awk '/22:20:[12][0-9]/' /home/igor/.minecraftx/instances/1.20.1-forge47.4.20/logs/latest.log)",
+      "Read(//home/igor/Завантаження/**)",
+      "Bash(unzip -l /home/igor/Завантаження/mods-nev.zip)",
+      "Bash(grep -v \"^Name$\\\\|^----\\\\|^$\\\\|^mods/$\")",
+      "Bash(awk '{gsub\\(/[-_.][0-9].*\\\\.jar$/,\"\"\\); print}' /tmp/cur-client-mods.txt)",
+      "Bash(awk '{gsub\\(/[-_.][0-9].*\\\\.jar$/,\"\"\\); print}' /tmp/new-mods.txt)",
+      "Bash(mkdir -p /tmp/new-mods-extracted)",
+      "Bash(unzip -q -o /home/igor/Завантаження/mods-nev.zip)",
+      "Bash(tar -cf /tmp/server-mods.tar -C /tmp/server-mods-deploy .)"
     ]
   }
 }

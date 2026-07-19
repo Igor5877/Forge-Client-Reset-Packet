@@ -98,6 +98,11 @@ public class FrozenFrameScreen extends Screen {
 
     @Override
     public void removed() {
+        // End the transition however this screen is dismissed. checkAndCloseLoadingScreen
+        // dismisses us via setScreen(null), which routes through removed() (NOT onClose),
+        // so without this the `active` flag leaked true forever and every subsequent
+        // chunk packet closed the player's open GUI. end() is idempotent.
+        SeamlessTransition.end();
         cleanup();
         super.removed();
     }
