@@ -105,11 +105,13 @@ public class FastLoginMod {
     private static Constructor   contextConstructor;
 
     public FastLoginMod() {
+        FastLoginConfig.register();
         IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();
         bus.addListener(FastLoginMod::onCommonSetup);
         MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onServerStarted);
         MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onServerTick);
         MinecraftForge.EVENT_BUS.addListener(FastLoginMod::onDatapackSync);
+        MinecraftForge.EVENT_BUS.addListener(FastLoginCommands::register);
     }
 
     private static void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent event) {

@@ -35,6 +35,7 @@ public class MixinServerPacketTiming {
 
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;)V", at = @At("HEAD"))
     private void fl$logKeyPacket(Packet<?> packet, CallbackInfo ci) {
+        if (!gg.chaldea.server.fastlogin.FastLoginConfig.SEND_TIMING_ENABLED.get()) return;
         String name = packet.getClass().getSimpleName();
         if (!fl$isKey(name)) return;
 
