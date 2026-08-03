@@ -21,8 +21,19 @@ import java.nio.charset.StandardCharsets;
  *   2. Proxy:
  *      - If no canonical stored yet: store this snapshot as canonical, mark
  *        the source backend as master. Return the same bytes.
- *      - If canonical exists: ignore the incoming snapshot (don't overwrite).
- *        Return the existing canonical bytes.
+ *      - If canonical exists and matches: return the existing canonical bytes.
+ *      - If canonical exists but DIFFERS (self-heal): a stale in-memory
+ *        canonical can no longer be produced by any live backend once a
+ *        modpack update adds/changes registry entries (seen 2026-08-03:
+ *        menu/block_entity_type IDs drifted between backends because the
+ *        canonical predated a mod update and was silently kept forever,
+ *        requiring a full manual stop-all/wipe-nbt/restart-in-order cycle
+ *        to fix). Instead of ignoring the new snapshot, ADOPT it as the new
+ *        canonical and return it unchanged, so this backend is immediately
+ *        confirmed as (the new) master. Previously-canonical backends do
+ *        NOT need to be touched by an operator - they self-correct the next
+ *        time they restart for any reason (deploy, crash-restart, or a
+ *        dynamic island spinning up fresh) by fetching this new canonical.
  *   3. Backend compares response to what it sent.
  *      - Identical: this backend IS the master, nothing to do.
  *      - Different: save response to local file. Next restart, MixinForgeHooks
@@ -81,10 +92,23 @@ public class CanonicalRegistrySync {
         canonicalSource = source;
         logger.info("[CanonicalRegistry] {} became master ({} bytes saved as canonical)",
                 source, body.length);
+      } else if (java.util.Arrays.equals(body, canonicalBytes)) {
+        logger.info("[CanonicalRegistry] {} registered ({} bytes); matches canonical from {}",
+                source, body.length, canonicalSource);
       } else {
-        boolean matchesCanonical = java.util.Arrays.equals(body, canonicalBytes);
-        logger.info("[CanonicalRegistry] {} registered ({} bytes); canonical is from {}; match={}",
-                source, body.length, canonicalSource, matchesCanonical);
+        // Self-heal: a live backend can never retroactively match a canonical
+        // that predates its current registry content (e.g. after a modpack
+        // update). Adopt this snapshot as the new canonical instead of
+        // silently keeping the stale one forever - see class javadoc.
+        String previousSource = canonicalSource;
+        int previousSize = canonicalBytes.length;
+        canonicalBytes = body;
+        canonicalSource = source;
+        logger.warn("[CanonicalRegistry] {} registered ({} bytes) DIFFERING from canonical "
+                + "previously set by {} ({} bytes) — auto-adopting {} as the new canonical "
+                + "(self-heal). {} and any other backend still on the old canonical will "
+                + "re-sync automatically on their next restart.",
+                source, body.length, previousSource, previousSize, source, previousSource);
       }
       responseBody = canonicalBytes;
     }
