@@ -2,6 +2,7 @@ package gg.chaldea.server.fastlogin.mixin;
 
 import com.mojang.datafixers.util.Either;
 import gg.chaldea.server.fastlogin.FastLoginMod;
+import gg.chaldea.server.fastlogin.NestworldBridge;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.IOWorker;
@@ -119,6 +120,17 @@ public abstract class MixinIOWorkerParallel {
     private void fl$parallelLoad(ChunkPos chunkPos,
                                   CallbackInfoReturnable<CompletableFuture<Optional<CompoundTag>>> cir) {
         if (!FastLoginMod.PARALLEL_IO_ENABLED) {
+            return;
+        }
+
+        // NestworldCore active -> its own region-sharded core already has decades
+        // of race conditions found via a SECOND independent concurrent-access path
+        // into chunk-loading. Our mailbox-bypass would be exactly that second path,
+        // so stay fully inert and let NestworldApi.prefetchChunks (called from
+        // MixinPlayerListDeferRecipes) provide the read-ahead speedup instead --
+        // its consumption happens INSIDE the mailbox-serialised path, after the
+        // pendingWrites check, so it never breaks the write/read ordering guarantee.
+        if (NestworldBridge.isActive()) {
             return;
         }
 
