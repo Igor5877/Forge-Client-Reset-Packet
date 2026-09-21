@@ -21,19 +21,31 @@ import java.nio.charset.StandardCharsets;
  *   2. Proxy:
  *      - If no canonical stored yet: store this snapshot as canonical, mark
  *        the source backend as master. Return the same bytes.
- *      - If canonical exists and matches: return the existing canonical bytes.
- *      - If canonical exists but DIFFERS (self-heal): a stale in-memory
- *        canonical can no longer be produced by any live backend once a
- *        modpack update adds/changes registry entries (seen 2026-08-03:
- *        menu/block_entity_type IDs drifted between backends because the
- *        canonical predated a mod update and was silently kept forever,
- *        requiring a full manual stop-all/wipe-nbt/restart-in-order cycle
- *        to fix). Instead of ignoring the new snapshot, ADOPT it as the new
- *        canonical and return it unchanged, so this backend is immediately
- *        confirmed as (the new) master. Previously-canonical backends do
- *        NOT need to be touched by an operator - they self-correct the next
- *        time they restart for any reason (deploy, crash-restart, or a
- *        dynamic island spinning up fresh) by fetching this new canonical.
+ *      - If canonical exists and matches: return the existing canonical bytes,
+ *        and clear any pending self-heal candidate (this registration just
+ *        confirmed the current canonical is still alive and reproducible).
+ *      - If canonical exists but DIFFERS (self-heal, quarantined): a stale
+ *        in-memory canonical can no longer be produced by any live backend
+ *        once a modpack update adds/changes registry entries (seen
+ *        2026-08-03: menu/block_entity_type IDs drifted between backends
+ *        because the canonical predated a mod update and was silently kept
+ *        forever, requiring a full manual stop-all/wipe-nbt/restart-in-order
+ *        cycle to fix). Naively adopting ANY differing snapshot immediately
+ *        (seen 2026-08-23) causes perpetual flip-flop when two backend
+ *        *types* legitimately produce two different-but-both-stable
+ *        snapshots (e.g. a lobby vs. an island backend whose own runtime
+ *        registry content genuinely differs by a fixed set of entries) -
+ *        every restart of either type re-triggers "self-heal" back to its
+ *        own shape, and no client ever gets a stable fingerprint to cache
+ *        against. Instead, a differing snapshot is held as a *pending
+ *        candidate*: it is only promoted to canonical once the SAME bytes
+ *        are reported a second time (any backend, any restart) while still
+ *        differing from canonical. A genuine one-time drift (every backend
+ *        settles on one new shape after an update) confirms itself this way
+ *        within two registrations; two backend types oscillating between
+ *        their own two stable shapes never repeats the same candidate twice
+ *        in a row, so it never promotes and canonical stays put - operators
+ *        still resolve that case with the documented full re-sync.
  *   3. Backend compares response to what it sent.
  *      - Identical: this backend IS the master, nothing to do.
  *      - Different: save response to local file. Next restart, MixinForgeHooks
@@ -51,6 +63,12 @@ public class CanonicalRegistrySync {
   // Shared canonical snapshot, lazily populated by the first backend that registers.
   private volatile byte[] canonicalBytes = null;
   private volatile String canonicalSource = null;
+
+  // Self-heal quarantine: a snapshot that differs from canonical must be seen
+  // twice (not necessarily from the same backend) before it is promoted. See
+  // class javadoc "quarantined" note.
+  private byte[] pendingBytes = null;
+  private String pendingSource = null;
 
   public CanonicalRegistrySync(Logger logger, int port) {
     this.logger = logger;
@@ -90,25 +108,53 @@ public class CanonicalRegistrySync {
       if (canonicalBytes == null) {
         canonicalBytes = body;
         canonicalSource = source;
+        pendingBytes = null;
+        pendingSource = null;
         logger.info("[CanonicalRegistry] {} became master ({} bytes saved as canonical)",
                 source, body.length);
       } else if (java.util.Arrays.equals(body, canonicalBytes)) {
-        logger.info("[CanonicalRegistry] {} registered ({} bytes); matches canonical from {}",
-                source, body.length, canonicalSource);
-      } else {
-        // Self-heal: a live backend can never retroactively match a canonical
-        // that predates its current registry content (e.g. after a modpack
-        // update). Adopt this snapshot as the new canonical instead of
-        // silently keeping the stale one forever - see class javadoc.
+        // A live confirmation of the current canonical - any differing
+        // candidate seen since is stale noise, drop it so it doesn't get a
+        // free pass on a later unrelated registration.
+        if (pendingBytes != null) {
+          logger.info("[CanonicalRegistry] {} registered ({} bytes); matches canonical from {} "
+                  + "- clearing stale pending candidate from {}",
+                  source, body.length, canonicalSource, pendingSource);
+          pendingBytes = null;
+          pendingSource = null;
+        } else {
+          logger.info("[CanonicalRegistry] {} registered ({} bytes); matches canonical from {}",
+                  source, body.length, canonicalSource);
+        }
+      } else if (pendingBytes != null && java.util.Arrays.equals(body, pendingBytes)) {
+        // Self-heal (confirmed): the same differing snapshot was reported
+        // twice in a row - a genuine, reproducible drift rather than one
+        // backend type's own permanent shape. Promote it.
         String previousSource = canonicalSource;
         int previousSize = canonicalBytes.length;
         canonicalBytes = body;
         canonicalSource = source;
-        logger.warn("[CanonicalRegistry] {} registered ({} bytes) DIFFERING from canonical "
-                + "previously set by {} ({} bytes) — auto-adopting {} as the new canonical "
-                + "(self-heal). {} and any other backend still on the old canonical will "
-                + "re-sync automatically on their next restart.",
-                source, body.length, previousSource, previousSize, source, previousSource);
+        pendingBytes = null;
+        pendingSource = null;
+        logger.warn("[CanonicalRegistry] {} registered ({} bytes) matching the pending candidate "
+                + "first seen from {} — CONFIRMED drift, auto-adopting as the new canonical "
+                + "(self-heal). Previous canonical was from {} ({} bytes); it and any other "
+                + "backend still on it will re-sync automatically on their next restart.",
+                source, body.length, pendingSource, previousSource, previousSize);
+      } else {
+        // First sighting of a differing snapshot (or it differs from both
+        // canonical and the previous pending candidate) - quarantine it
+        // instead of adopting immediately. See class javadoc.
+        String discardedPendingSource = pendingSource;
+        pendingBytes = body;
+        pendingSource = source;
+        logger.warn("[CanonicalRegistry] {} registered ({} bytes) DIFFERING from canonical set by "
+                + "{} ({} bytes) — holding as pending self-heal candidate (needs to be seen again "
+                + "to promote); canonical unchanged for now.{}",
+                source, body.length, canonicalSource, canonicalBytes.length,
+                discardedPendingSource != null
+                        ? " (replaces stale pending candidate from " + discardedPendingSource + ")"
+                        : "");
       }
       responseBody = canonicalBytes;
     }
@@ -146,6 +192,8 @@ public class CanonicalRegistrySync {
   public synchronized void reset() {
     canonicalBytes = null;
     canonicalSource = null;
+    pendingBytes = null;
+    pendingSource = null;
     logger.info("[CanonicalRegistry] Cleared canonical state");
   }
 }
