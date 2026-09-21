@@ -24,7 +24,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * Invalidation:
  *   - Modset different → different key, automatic miss.
  *   - Server reloaded recipes (/reload) → different content hash, automatic miss.
- *   - GameData.revertToFrozen → caller invokes invalidateAll().
+ *   - GameData.revertToFrozen does NOT clear this cache: injectSnapshot only
+ *     remaps each ForgeRegistry's RL<->int ID table, it never recreates the
+ *     registered Item/Block objects, so cached Recipe/Ingredient object
+ *     graphs stay valid across a re-injection. Revisiting a registry
+ *     fingerprint seen earlier this session can reuse its cached recipe set
+ *     instead of paying the vanilla rebuild again.
  */
 public class RecipeCache {
 

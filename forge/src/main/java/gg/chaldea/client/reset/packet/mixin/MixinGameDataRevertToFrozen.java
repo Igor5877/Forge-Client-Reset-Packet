@@ -1,6 +1,5 @@
 package gg.chaldea.client.reset.packet.mixin;
 
-import gg.chaldea.client.reset.packet.RecipeCache;
 import gg.chaldea.client.reset.packet.RegistryCacheState;
 import gg.chaldea.client.reset.packet.TagCache;
 import net.minecraftforge.registries.GameData;
@@ -20,6 +19,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * MixinMinecraft already skips ForgeHooksClient.handleClientLevelClosing
  * during soft CRP transitions (Phase 1), so this only fires on full-disconnect
  * paths — exactly the path that was crashing.
+ *
+ * RecipeCache is deliberately NOT invalidated here. injectSnapshot only
+ * remaps the RL<->int ID table of each ForgeRegistry; it never recreates the
+ * registered Item/Block Java objects (mods construct those once at load
+ * time), so previously-cached Recipe/Ingredient object graphs still
+ * reference the correct entries after a fresh injection. RecipeCache's own
+ * key (registry fingerprint + recipe content hash) already forces a miss
+ * whenever either actually changes, so revisiting a fingerprint we've seen
+ * before in this session can reuse the cached recipe set instead of paying
+ * the ~3-9s vanilla rebuild again. TagCache is different: tag bindings live
+ * inside the Registry objects themselves (not a swappable Map), and
+ * revertToFrozen resets that live state back to frozen, so a stale "already
+ * applied" marker would wrongly skip re-binding — it must stay invalidated.
  */
 @Mixin(value = GameData.class, remap = false)
 public abstract class MixinGameDataRevertToFrozen {
@@ -27,7 +39,6 @@ public abstract class MixinGameDataRevertToFrozen {
     @Inject(method = "revertToFrozen", at = @At("HEAD"))
     private static void crp$invalidateRegistryCache(CallbackInfo ci) {
         RegistryCacheState.invalidate("GameData.revertToFrozen");
-        RecipeCache.invalidateAll("GameData.revertToFrozen");
         TagCache.invalidateAll("GameData.revertToFrozen");
     }
 }
