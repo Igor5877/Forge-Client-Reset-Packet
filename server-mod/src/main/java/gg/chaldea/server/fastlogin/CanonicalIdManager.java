@@ -62,14 +62,54 @@ public final class CanonicalIdManager {
 
     private CanonicalIdManager() {}
 
-    private static Path resolveCanonicalPath(MinecraftServer server) {
+    /**
+     * Local canonical file: <server-root>/canonical-registry-ids.nbt (parent of
+     * the world dir). ONE resolver for both write (ServerStarted) and read
+     * (patchRootTag). Until 2026-10 the writer used getWorldPath(ROOT) =
+     * "./world/." whose parent is the WORLD dir, while the reader used the
+     * server root — the written file was never read, so a server that started
+     * while the proxy was down got no canonical at all and its non-persisted
+     * registries (menus, particles, ...) mismatched every other backend.
+     */
+    private static Path canonicalPathForWorld(Path worldDir) {
         String fromEnv = System.getenv("FASTLOGIN_CANONICAL_IDS_FILE");
         if (fromEnv != null && !fromEnv.isEmpty()) {
             return Paths.get(fromEnv);
         }
-        // Default: parent of world dir.
-        Path worldRoot = server.getWorldPath(LevelResource.ROOT);
-        return worldRoot.getParent().resolve("canonical-registry-ids.nbt");
+        Path parent = worldDir.toAbsolutePath().normalize().getParent();
+        return (parent != null ? parent : worldDir).resolve("canonical-registry-ids.nbt");
+    }
+
+    private static Path resolveCanonicalPath(MinecraftServer server) {
+        return canonicalPathForWorld(server.getWorldPath(LevelResource.ROOT));
+    }
+
+    /** Sidecar with the modset fingerprint the local canonical belongs to. */
+    private static Path modsetSidecar(Path canonicalFile) {
+        return canonicalFile.resolveSibling(canonicalFile.getFileName() + ".modset");
+    }
+
+    /**
+     * Fingerprint of the loaded modset (sorted modId@version). A local canonical
+     * is only trusted when it was written for the same modset — after a mod is
+     * added/removed the old IDs no longer describe this server (2026-10-06:
+     * removing 3 Packaged mods left every local file stale).
+     */
+    static String modsetFingerprint() {
+        try {
+            java.util.List<String> ids = new java.util.ArrayList<>();
+            for (net.minecraftforge.forgespi.language.IModInfo m : net.minecraftforge.fml.ModList.get().getMods()) {
+                ids.add(m.getModId() + "@" + m.getVersion());
+            }
+            java.util.Collections.sort(ids);
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] h = md.digest(String.join("\n", ids).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 16; i++) sb.append(String.format("%02x", h[i]));
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**
@@ -119,35 +159,82 @@ public final class CanonicalIdManager {
         String proxyUrl = System.getenv("FASTLOGIN_PROXY_URL");
 
         if (proxyUrl != null && !proxyUrl.isEmpty()) {
-            byte[] received = postToProxy(proxyUrl, server.getMotd(), ourBytes);
-            if (received != null) {
-                if (Arrays.equals(received, ourBytes)) {
-                    LOGGER.info("[CanonicalID] Proxy confirms WE ARE canonical master ({} registries, {} bytes)",
-                            snapCount, ourBytes.length);
-                } else {
-                    LOGGER.info("[CanonicalID] Proxy returned different canonical ({} bytes vs our {} bytes) — saving for next restart",
-                            received.length, ourBytes.length);
-                    writeLocalCanonical(canonicalFile, received);
-                }
+            if (registerWithProxy(proxyUrl, server.getMotd(), ourBytes, snapCount, canonicalFile)) {
                 return;
             }
-            LOGGER.warn("[CanonicalID] Proxy at {} unreachable — falling back to local-file canonical", proxyUrl);
-        }
-
-        // Fallback: local-file canonical (legacy/standalone mode)
-        if (Files.exists(canonicalFile)) {
-            LOGGER.info("[CanonicalID] Existing local canonical at {} — leaving alone", canonicalFile);
+            LOGGER.warn("[CanonicalID] Proxy at {} unreachable — will keep retrying in the background "
+                    + "(every {} s for {} min)", proxyUrl, RETRY_EVERY_S, RETRY_FOR_MIN);
+            scheduleRetries(proxyUrl, server.getMotd(), ourBytes, snapCount, canonicalFile);
             return;
         }
+
+        // Standalone (no proxy): our own snapshot is the canonical; keep the file fresh.
         writeLocalCanonical(canonicalFile, ourBytes);
         LOGGER.info("[CanonicalID] WROTE local canonical: {} registries → {}", snapCount, canonicalFile);
+    }
+
+    private static final int RETRY_EVERY_S = 30;
+    private static final int RETRY_FOR_MIN = 15;
+
+    /**
+     * POST our snapshot; on success refresh the local file with the canonical
+     * the proxy holds (so a later start without the proxy still gets the
+     * CURRENT canonical). Returns false if the proxy did not answer.
+     */
+    private static boolean registerWithProxy(String proxyUrl, String serverName, byte[] ourBytes,
+                                             int snapCount, Path canonicalFile) {
+        byte[] received = postToProxy(proxyUrl, serverName, ourBytes);
+        if (received == null) {
+            return false;
+        }
+        writeLocalCanonical(canonicalFile, received);
+        if (Arrays.equals(received, ourBytes)) {
+            LOGGER.info("[CanonicalID] Proxy confirms WE ARE canonical master ({} registries, {} bytes); local copy refreshed",
+                    snapCount, ourBytes.length);
+        } else {
+            // Running IDs differ from canonical — only a restart applies them (the
+            // mixin patches level.dat before Forge loads registries).
+            LOGGER.warn("[CanonicalID] RESTART NEEDED: proxy canonical ({} bytes) differs from our running IDs "
+                    + "({} bytes) — saved locally, applied on the next start; until then switches to/from this "
+                    + "server use the slow path", received.length, ourBytes.length);
+        }
+        return true;
+    }
+
+    /** Proxy was down at startup (host boot order, proxy restart): register as soon as it is back. */
+    private static void scheduleRetries(String proxyUrl, String serverName, byte[] ourBytes,
+                                        int snapCount, Path canonicalFile) {
+        java.util.concurrent.ScheduledExecutorService ex =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "FastLogin-CanonicalRetry");
+                    t.setDaemon(true);  // never keep the JVM alive on shutdown
+                    return t;
+                });
+        final int[] attempts = {0};
+        final int maxAttempts = RETRY_FOR_MIN * 60 / RETRY_EVERY_S;
+        ex.scheduleWithFixedDelay(() -> {
+            attempts[0]++;
+            if (registerWithProxy(proxyUrl, serverName, ourBytes, snapCount, canonicalFile)) {
+                LOGGER.info("[CanonicalID] Registered with the proxy after {} retr{}", attempts[0],
+                        attempts[0] == 1 ? "y" : "ies");
+                ex.shutdown();
+            } else if (attempts[0] >= maxAttempts) {
+                LOGGER.warn("[CanonicalID] Proxy still unreachable after {} min — giving up until the next start",
+                        RETRY_FOR_MIN);
+                ex.shutdown();
+            }
+        }, RETRY_EVERY_S, RETRY_EVERY_S, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     private static void writeLocalCanonical(Path canonicalFile, byte[] bytes) {
         try {
             Path parent = canonicalFile.getParent();
             if (parent != null) Files.createDirectories(parent);
-            Files.write(canonicalFile, bytes);
+            Path tmp = canonicalFile.resolveSibling(canonicalFile.getFileName() + ".tmp");
+            Files.write(tmp, bytes);
+            Files.move(tmp, canonicalFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            Files.writeString(modsetSidecar(canonicalFile), modsetFingerprint());
         } catch (IOException e) {
             LOGGER.error("[CanonicalID] Failed to write local canonical at {}: {}", canonicalFile, e.getMessage());
         }
@@ -203,14 +290,24 @@ public final class CanonicalIdManager {
             // dataFile() (→ m_230858_()) returns <worldRoot>/level.dat — its
             // parent is identical to path() and IS correctly remapped.
             Path worldRoot = levelDirectory.dataFile().getParent();
-            String fromEnv = System.getenv("FASTLOGIN_CANONICAL_IDS_FILE");
-            canonicalFile = (fromEnv != null && !fromEnv.isEmpty())
-                    ? Paths.get(fromEnv)
-                    : worldRoot.getParent().resolve("canonical-registry-ids.nbt");
+            canonicalFile = canonicalPathForWorld(worldRoot);
 
             if (!Files.exists(canonicalFile)) {
                 LOGGER.info("[CanonicalID] No canonical from proxy or at {} — this server will become canonical after first start",
                         canonicalFile);
+                return;
+            }
+            String stored = "";
+            try {
+                stored = Files.readString(modsetSidecar(canonicalFile)).trim();
+            } catch (IOException ignored) {
+                // no sidecar = file from before modset tracking — treat as stale
+            }
+            String current = modsetFingerprint();
+            if (!stored.equals(current)) {
+                LOGGER.warn("[CanonicalID] Local canonical at {} belongs to a different modset ({} vs current {}) — "
+                        + "ignoring it; proxy unreachable, using this server's own IDs", canonicalFile,
+                        stored.isEmpty() ? "unknown" : stored, current);
                 return;
             }
             try {
