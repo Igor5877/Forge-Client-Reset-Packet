@@ -1,7 +1,8 @@
 package gg.chaldea.client.reset.packet.mixin;
 
-import com.google.common.io.BaseEncoding;
 import gg.chaldea.client.reset.packet.RegistryCacheState;
+import gg.chaldea.client.reset.packet.RegistryFingerprint;
+import gg.chaldea.client.reset.packet.RegistryPrewarm;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraftforge.network.HandshakeHandler;
 import net.minecraftforge.network.NetworkEvent;
@@ -14,11 +15,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.lang.reflect.Field;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.function.Supplier;
 
 /**
@@ -62,6 +59,8 @@ public abstract class MixinHandshakeHandlerCache {
         }
         String currentFp = crp$computeFingerprint(registrySnapshots);
         String cached = RegistryCacheState.lastInjectedFingerprint;
+        // The real handshake takes over from any replayed pre-warm (HIT or MISS below).
+        RegistryPrewarm.consumed();
         if (currentFp.equals(cached)) {
             LOGGER.info("[RegCache] HIT — skipping GameData.injectSnapshot for fingerprint {} ({} registries)",
                     currentFp.substring(0, 12) + "…", registrySnapshots.size());
@@ -82,91 +81,13 @@ public abstract class MixinHandshakeHandlerCache {
                 RegistryCacheState.lastInjectedFingerprint = fp;
                 LOGGER.info("[RegCache] STORED fingerprint {} ({} registries) after fresh injection",
                         fp.substring(0, 12) + "…", registrySnapshots.size());
+                // Persist the INPUTS (not live state) so the next launch can replay them at the main menu.
+                RegistryPrewarm.persistAsync(registrySnapshots, fp);
             }
-        }
-    }
-
-    private static volatile Field crp$idsField = null;
-    private static volatile boolean crp$idsFieldResolved = false;
-
-    /**
-     * Resolve the "registry entries" field on ForgeRegistry.Snapshot lazily
-     * via reflection. With Sinytra Connector loaded the class layout may differ
-     * from our compile-time view (which caused NoSuchFieldError on direct
-     * snap.ids access). We try common names; if all fail, fall back to a
-     * weaker fingerprint that uses only the outer Map's keys (registry
-     * names + count). Acceptable for a single-modpack multi-backend setup
-     * where every backend serves identical registries.
-     */
-    private static Map<?, ?> crp$reflectIds(Object snap) {
-        if (!crp$idsFieldResolved) {
-            synchronized (MixinHandshakeHandlerCache.class) {
-                if (!crp$idsFieldResolved) {
-                    for (String name : new String[]{"ids", "f_ids", "entries", "registry"}) {
-                        try {
-                            Field f = snap.getClass().getDeclaredField(name);
-                            f.setAccessible(true);
-                            if (Map.class.isAssignableFrom(f.getType())) {
-                                crp$idsField = f;
-                                LOGGER.info("[RegCache] Resolved Snapshot ids field via reflection: {}", name);
-                                break;
-                            }
-                        } catch (NoSuchFieldException ignored) {}
-                    }
-                    if (crp$idsField == null) {
-                        // Last resort: first Map field on the class.
-                        for (Field f : snap.getClass().getDeclaredFields()) {
-                            if (Map.class.isAssignableFrom(f.getType())) {
-                                f.setAccessible(true);
-                                crp$idsField = f;
-                                LOGGER.info("[RegCache] Falling back to first Map field on Snapshot: {}", f.getName());
-                                break;
-                            }
-                        }
-                    }
-                    if (crp$idsField == null) {
-                        LOGGER.warn("[RegCache] No Map field found on Snapshot — fingerprint will use names only");
-                    }
-                    crp$idsFieldResolved = true;
-                }
-            }
-        }
-        if (crp$idsField == null) return null;
-        try {
-            return (Map<?, ?>) crp$idsField.get(snap);
-        } catch (IllegalAccessException e) {
-            return null;
         }
     }
 
     private static String crp$computeFingerprint(Map<ResourceLocation, ForgeRegistry.Snapshot> snapshots) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            TreeMap<ResourceLocation, ForgeRegistry.Snapshot> sorted = new TreeMap<>(snapshots);
-            for (Map.Entry<ResourceLocation, ForgeRegistry.Snapshot> e : sorted.entrySet()) {
-                md.update(e.getKey().toString().getBytes());
-                md.update((byte) '|');
-                ForgeRegistry.Snapshot snap = e.getValue();
-                Map<?, ?> ids = snap == null ? null : crp$reflectIds(snap);
-                if (ids != null) {
-                    // Sort the inner map keys lexicographically for determinism
-                    // regardless of underlying Map impl on this Forge build.
-                    TreeMap<String, Object> idsSorted = new TreeMap<>();
-                    for (Map.Entry<?, ?> idEntry : ids.entrySet()) {
-                        idsSorted.put(String.valueOf(idEntry.getKey()), idEntry.getValue());
-                    }
-                    for (Map.Entry<String, Object> idEntry : idsSorted.entrySet()) {
-                        md.update(idEntry.getKey().getBytes());
-                        md.update((byte) '=');
-                        md.update(String.valueOf(idEntry.getValue()).getBytes());
-                        md.update((byte) ',');
-                    }
-                }
-                md.update((byte) '\n');
-            }
-            return BaseEncoding.base16().lowerCase().encode(md.digest());
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
-        }
+        return RegistryFingerprint.compute(snapshots);
     }
 }
